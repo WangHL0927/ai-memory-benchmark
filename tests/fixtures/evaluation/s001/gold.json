@@ -1,0 +1,63 @@
+{
+  "sample_id": "s001",
+  "session_id": "synthetic-s001",
+  "source": "synthetic",
+  "turns": 1,
+  "layer": "random",
+  "standard_version": "v0.4",
+  "policy": {
+    "id": "default",
+    "version": "v1"
+  },
+  "project": [
+    "garden"
+  ],
+  "frozen_at": "2026-11-11T10:00:00Z",
+  "gold_revision": 0,
+  "U": [
+    {
+      "unit_id": "u1",
+      "category": "decision",
+      "attributes": {
+        "basis": "confirmed"
+      },
+      "statement": "花园项目使用蓝色水管。",
+      "conditions": [],
+      "scope": "project:garden",
+      "evidence": [
+        {
+          "turn": 1,
+          "quote": "以后用蓝色水管"
+        }
+      ],
+      "uncertain": false,
+      "origin": "blind",
+      "note": "合成金标：用户确认的项目选择"
+    },
+    {
+      "unit_id": "u2",
+      "category": "decision",
+      "attributes": {
+        "basis": "confirmed"
+      },
+      "statement": "花园水管仅在冬季使用。",
+      "conditions": [],
+      "scope": "project:garden",
+      "evidence": [
+        {
+          "turn": 1,
+          "quote": "水管只在冬季使用"
+        }
+      ],
+      "uncertain": false,
+      "origin": "blind",
+      "note": "合成金标：用户确认的项目选择"
+    }
+  ],
+  "N": [],
+  "dataset": "synthetic",
+  "annotator": {
+    "tool": "synthetic",
+    "model": "fixture-gold"
+  }
+}

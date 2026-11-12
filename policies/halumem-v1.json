@@ -1,0 +1,42 @@
+{
+  "id": "halumem",
+  "version": "v1",
+  "categories": [
+    "Persona Memory",
+    "Event Memory",
+    "Relationship Memory"
+  ],
+  "attributes": {
+    "is_update": {
+      "values": [
+        "false",
+        "true"
+      ]
+    },
+    "memory_source": {
+      "values": [
+        "primary",
+        "secondary",
+        "system"
+      ]
+    }
+  },
+  "reject_reasons": [
+    "distractor",
+    "superseded",
+    "unsupported",
+    "irrelevant",
+    "wrong_scope"
+  ],
+  "condition_types": [
+    "temporal",
+    "scope_limit",
+    "modality",
+    "rationale"
+  ],
+  "scope_values": [
+    "project:halumem"
+  ],
+  "superseded": "final_state_only",
+  "flags": []
+}

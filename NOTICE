@@ -1,0 +1,12 @@
+AI Memory Benchmark
+Copyright 2026 WangHL0927
+
+This product includes software developed by WangHL0927, licensed under the
+Apache License, Version 2.0 (see LICENSE).
+
+Documentation, evaluation framework, policies and reports are licensed under
+the Creative Commons Attribution 4.0 International License (CC-BY-4.0).
+
+Data under data/ derived from Trace Commons (trace-commons/agent-traces,
+https://huggingface.co/datasets/trace-commons/agent-traces) is licensed under
+CC-BY-4.0. Attribution: Trace Commons contributors.

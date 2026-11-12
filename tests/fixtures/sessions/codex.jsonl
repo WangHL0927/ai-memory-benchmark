@@ -1,0 +1,11 @@
+{"timestamp":"2026-11-11T09:00:00Z","type":"session_meta","payload":{"id":"synthetic-codex","cwd":"/synthetic/library","timestamp":"2026-11-11T09:00:00Z"}}
+{"timestamp":"2026-11-11T09:00:00Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"这条开发者注入不应保留"}]}}
+{"timestamp":"2026-11-11T09:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions\n<INSTRUCTIONS>这条入口注入不应保留</INSTRUCTIONS><environment_context>合成环境</environment_context>"}]}}
+{"timestamp":"2026-11-11T09:01:00Z","type":"response_item","payload":{"type":"message","id":"x1","role":"user","content":[{"type":"input_text","text":"图书馆项目以后把借阅记录保留一年，这个决定请记下来。"}]}}
+{"timestamp":"2026-11-11T09:01:00Z","type":"event_msg","payload":{"type":"user_message","message":"这是消息镜像不应保留"}}
+{"timestamp":"2026-11-11T09:02:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"我先检查合成配置。"}]}}
+{"timestamp":"2026-11-11T09:02:01Z","type":"response_item","payload":{"type":"function_call","name":"read_config","call_id":"x-call","arguments":"{\"file\":\"library.conf\"}"}}
+{"timestamp":"2026-11-11T09:02:02Z","type":"response_item","payload":{"type":"function_call_output","call_id":"x-call","output":"配置保留一年"}}
+{"timestamp":"2026-11-11T09:03:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"对，确认就是一年，这项规定只适用于图书馆项目。"}]}}
+{"timestamp":"2026-11-11T09:04:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"已经确认规定。"}]}}
+{"timestamp":"2026-11-11T09:05:00Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"这次临时打印两页目录，不必当作长期设置保存。"}]}}

@@ -1,0 +1,12 @@
+{
+  "standard_version": "v0.4",
+  "policy": {
+    "id": "default",
+    "version": "v1"
+  },
+  "system": {
+    "name": "alpha",
+    "llm": "fixture-product"
+  },
+  "D": []
+}

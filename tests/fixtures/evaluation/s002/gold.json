@@ -1,0 +1,44 @@
+{
+  "sample_id": "s002",
+  "session_id": "synthetic-s002",
+  "source": "synthetic",
+  "turns": 1,
+  "layer": "random",
+  "standard_version": "v0.4",
+  "policy": {
+    "id": "default",
+    "version": "v1"
+  },
+  "project": [
+    "garden"
+  ],
+  "frozen_at": "2026-11-11T10:00:00Z",
+  "gold_revision": 0,
+  "U": [
+    {
+      "unit_id": "u1",
+      "category": "decision",
+      "attributes": {
+        "basis": "confirmed"
+      },
+      "statement": "花园屋顶使用灰色瓦片。",
+      "conditions": [],
+      "scope": "project:garden",
+      "evidence": [
+        {
+          "turn": 1,
+          "quote": "屋顶以后用灰色瓦片"
+        }
+      ],
+      "uncertain": false,
+      "origin": "blind",
+      "note": "合成金标：用户确认的项目选择"
+    }
+  ],
+  "N": [],
+  "dataset": "synthetic",
+  "annotator": {
+    "tool": "synthetic",
+    "model": "fixture-gold"
+  }
+}

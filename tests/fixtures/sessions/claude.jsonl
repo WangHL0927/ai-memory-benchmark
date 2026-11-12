@@ -1,0 +1,9 @@
+{"type":"system","message":{"content":"这条环境注入不应保留"}}
+{"type":"user","uuid":"c-u1","timestamp":"2026-11-11T08:00:00Z","sessionId":"synthetic-claude","cwd":"/synthetic/garden","message":{"role":"user","content":"请记住，花园项目以后使用蓝色水管，这是我们已经确认的选择。"}}
+{"type":"assistant","uuid":"c-a1","timestamp":"2026-11-11T08:01:00Z","message":{"id":"a1","role":"assistant","content":[{"type":"thinking","thinking":"这条内部思考不应保留"},{"type":"text","text":"我会核对配置。"}]}}
+{"type":"assistant","uuid":"c-a2","timestamp":"2026-11-11T08:01:01Z","message":{"id":"a1","role":"assistant","content":[{"type":"tool_use","id":"call1","name":"read_config","input":{"file":"garden.conf"}}]}}
+{"type":"user","uuid":"c-tool","timestamp":"2026-11-11T08:01:02Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call1","content":"配置：蓝色"}]}}
+{"type":"user","uuid":"c-hook","isMeta":true,"message":{"role":"user","content":"这条 hook 输出不应保留"}}
+{"type":"user","uuid":"c-u2","timestamp":"2026-11-11T08:02:00Z","message":{"role":"user","content":[{"type":"text","text":"<system-reminder>这条提醒不应保留</system-reminder>对，水管的颜色以后固定为蓝色，别更换。"}]}}
+{"type":"assistant","uuid":"c-a3","timestamp":"2026-11-11T08:03:00Z","message":{"id":"a2","role":"assistant","content":"已经确认。"}}
+{"type":"user","uuid":"c-u3","timestamp":"2026-11-11T08:04:00Z","message":{"role":"user","content":"今天只把喷头擦干净，这次操作不需要记成长期习惯。"}}

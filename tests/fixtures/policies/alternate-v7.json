@@ -1,0 +1,16 @@
+{
+  "id": "alternate",
+  "version": "v7",
+  "categories": ["observation", "plan"],
+  "attributes": {
+    "certainty": {
+      "values": ["tentative", "settled"],
+      "allowed_by_category": {"observation": ["tentative", "settled"], "plan": ["settled"]}
+    }
+  },
+  "reject_reasons": ["noise", "expired", "superseded"],
+  "condition_types": ["season"],
+  "scope_values": ["project:*", "team"],
+  "superseded": "keep_history",
+  "flags": ["needs_review", "sensitive"]
+}

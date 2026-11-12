@@ -1,0 +1,21 @@
+{
+  "id": "default",
+  "version": "v1",
+  "categories": ["decision", "preference", "fact", "research"],
+  "attributes": {
+    "basis": {
+      "values": ["explicit", "confirmed", "verified"],
+      "allowed_by_category": {
+        "decision": ["explicit", "confirmed"],
+        "preference": ["explicit", "confirmed"],
+        "fact": ["explicit", "confirmed", "verified"],
+        "research": ["explicit", "confirmed", "verified"]
+      }
+    }
+  },
+  "reject_reasons": ["chitchat", "one_off", "unconfirmed", "superseded", "general", "doc_restate", "news", "bare_error", "other_subject", "wrong_scope"],
+  "condition_types": ["scope_limit", "temporal", "once_only", "needs_confirm", "action_type", "rationale"],
+  "scope_values": ["project:*", "global", "user"],
+  "superseded": "final_state_only",
+  "flags": ["contains_secret"]
+}

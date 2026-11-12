@@ -1,0 +1,23 @@
+{
+  "recall": [
+    {
+      "unit_id": "u1",
+      "verdict": "none",
+      "memories": [],
+      "note": "合成判断"
+    }
+  ],
+  "precision": [],
+  "judge": {
+    "tool": "synthetic",
+    "model": "fixture-judge",
+    "prompt_version": "split-v1",
+    "prompt_versions": {
+      "recall": "model-judge-recall-v1",
+      "precision": "model-judge-precision-v4"
+    }
+  },
+  "run_sha256": "72f083eb5f035855008f66c45b63b943d072030e03b94f707738fc6680cd224d",
+  "gold_sha256": "7b3c26a1fd185b9aff50a12a53c1be8d6625650892c7b53a439b971459f09b39",
+  "transcript_sha256": "2656a85cc9a3c045ca8239648daafd04887621717bbb5a54f59e7c9543048cf1"
+}

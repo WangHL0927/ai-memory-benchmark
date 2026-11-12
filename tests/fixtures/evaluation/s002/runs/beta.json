@@ -1,0 +1,18 @@
+{
+  "standard_version": "v0.4",
+  "policy": {
+    "id": "default",
+    "version": "v1"
+  },
+  "system": {
+    "name": "beta",
+    "llm": "fixture-product"
+  },
+  "D": [
+    {
+      "draft": {
+        "statement": "用户正在谈论屋顶。"
+      }
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+.DS_Store
+# 不适合公开的内容一律放在 tmp/（不进 git）：自有会话、标注、外部数据集副本、派活记录
+tmp/
+# data/ 下仅放经过发布检查的版本化产物；reports/ 下放公开报告
+data/*
+!data/.gitkeep
+!data/*/
+# Python 测试产生的字节码
+__pycache__/
+*.py[cod]
+
+# 本地配置（含 API key），只留本地；示例见 .env.example
+.env

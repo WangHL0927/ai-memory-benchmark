@@ -1,0 +1,31 @@
+# 固定版原生默认摄取；助手正文仍不采集。只手动执行一次单页 consolidation。
+backfill_on_start = false
+consolidate_on_session_end = false
+capture_assistant = false
+llm_provider = "openai-compat"
+llm_model = $model
+llm_base_url = $proxy_url
+llm_timeout_secs = $request_timeout
+embedding_provider = "openai-compat"
+embedding_model = $embedding_model
+embedding_base_url = $proxy_url
+embedding_dim = $dimensions
+llm_fallbacks = []
+
+[auto_improve]
+on_session_end = false
+[auto_improve.scheduler]
+enabled = false
+experience_every_sessions = 0
+[maintenance]
+enabled = false
+embedding_backfill_interval_secs = 0
+[dream]
+enabled = false
+[profile]
+enabled = false
+llm = false
+inject_on_session_start = false
+[handoff]
+claim_on_session_start = false
+create_on_session_end = false

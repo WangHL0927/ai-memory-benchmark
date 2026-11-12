@@ -1,0 +1,58 @@
+{
+  "recall": [
+    {
+      "unit_id": "u1",
+      "verdict": "distorted",
+      "memories": [
+        "m1"
+      ],
+      "note": "合成判断"
+    },
+    {
+      "unit_id": "u2",
+      "verdict": "distorted",
+      "memories": [
+        "m1"
+      ],
+      "note": "合成判断"
+    }
+  ],
+  "precision": [
+    {
+      "memory_id": "m1",
+      "grounded": "no",
+      "distorted": true,
+      "worth": "yes",
+      "note": "合成判断",
+      "claims": 2,
+      "unsupported": 0,
+      "partial": 0,
+      "distorted_claims": 2,
+      "verbatim": false,
+      "errors": [
+        {
+          "text": "花园全年使用水管",
+          "type": "distorted",
+          "reason": "用户限定只在冬季使用"
+        },
+        {
+          "text": "水管是红色",
+          "type": "distorted",
+          "reason": "用户选择蓝色"
+        }
+      ]
+    }
+  ],
+  "judge": {
+    "tool": "synthetic",
+    "model": "fixture-judge",
+    "prompt_version": "split-v1",
+    "prompt_versions": {
+      "recall": "model-judge-recall-v1",
+      "precision": "model-judge-precision-v4"
+    }
+  },
+  "run_sha256": "06aba223dd60e101d9f8514769547852f588437ba33881eced1b51e6e3b5c91f",
+  "gold_sha256": "cda46c9d9eec30986ce37971a22d073cf274174424fb82d3f78ffc0c7837209d",
+  "transcript_sha256": "8978f07f840650a9e4791518d872c3c7280275dc4c182608cf814483d378d340"
+}

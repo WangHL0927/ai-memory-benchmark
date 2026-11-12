@@ -1,0 +1,17 @@
+{
+  "id": "IAAR-Shanghai/HaluMem",
+  "source": "https://huggingface.co/datasets/IAAR-Shanghai/HaluMem",
+  "revision": "cb04336aa1b732d4b24f5186c552456b4099806e",
+  "redistribution": "scores_only",
+  "license": "CC-BY-NC-ND-4.0",
+  "access": "公开，无需申请",
+  "notes": "禁止演绎和再发布：原始数据和转换产物都不进仓库，只公布分数和产物的 sha256。",
+  "local_dir": "tmp/datasets/halumem/raw",
+  "files": [
+    {
+      "path": "HaluMem-Medium.jsonl",
+      "size": 33511525,
+      "sha256": "486fbc130a5c8781a2af27ffa508a1d7855245137aa449c193ac4d29c45634e7"
+    }
+  ]
+}

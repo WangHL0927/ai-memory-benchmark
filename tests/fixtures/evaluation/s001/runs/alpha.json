@@ -1,0 +1,18 @@
+{
+  "standard_version": "v0.4",
+  "policy": {
+    "id": "default",
+    "version": "v1"
+  },
+  "system": {
+    "name": "alpha",
+    "llm": "fixture-product"
+  },
+  "D": [
+    {
+      "draft": {
+        "statement": "花园以后用蓝色水管，只在冬季使用。"
+      }
+    }
+  ]
+}

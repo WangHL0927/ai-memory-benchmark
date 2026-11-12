@@ -1,0 +1,39 @@
+{
+  "recall": [
+    {
+      "unit_id": "u1",
+      "verdict": "partial",
+      "memories": [
+        "m1"
+      ],
+      "note": "合成判断"
+    }
+  ],
+  "precision": [
+    {
+      "memory_id": "m1",
+      "grounded": "yes",
+      "distorted": false,
+      "worth": "yes",
+      "note": "合成判断",
+      "claims": 1,
+      "unsupported": 0,
+      "partial": 0,
+      "distorted_claims": 0,
+      "verbatim": false,
+      "errors": []
+    }
+  ],
+  "judge": {
+    "tool": "synthetic",
+    "model": "fixture-judge",
+    "prompt_version": "split-v1",
+    "prompt_versions": {
+      "recall": "model-judge-recall-v1",
+      "precision": "model-judge-precision-v4"
+    }
+  },
+  "run_sha256": "58bc99adf326b0f633e63ffd3bfe67a49dd813fcd19facd6c9065bb74325ac1a",
+  "gold_sha256": "7b3c26a1fd185b9aff50a12a53c1be8d6625650892c7b53a439b971459f09b39",
+  "transcript_sha256": "2656a85cc9a3c045ca8239648daafd04887621717bbb5a54f59e7c9543048cf1"
+}
