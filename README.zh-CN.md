@@ -64,7 +64,7 @@
 环境要求：Python 3（只用标准库，已在 3.14 上测试）。
 
 ```sh
-git clone <仓库地址> && cd <仓库目录>
+git clone https://github.com/WangHL0927/ai-memory-benchmark.git && cd ai-memory-benchmark
 
 # 运行单元测试（全部使用合成数据，不访问外部模型或产品）
 python3 -m unittest
@@ -167,7 +167,7 @@ python3 -m tools.report_split_html <输出路径>.json --output <输出路径>.h
 | 数据集 | 内容 | 许可 | 本仓库发布什么 |
 |---|---|---|---|
 | [HaluMem-Medium](datasets/halumem.json) | 多轮日常对话，自带金标（[使用说明](docs/halumem.md)） | CC-BY-NC-ND-4.0 | 只发布分数和哈希 |
-| [Trace Commons](datasets/trace-commons.json) | coding agent 会话 | CC-BY-4.0 | 署名后发布加工产物（金标、系统输出、判定） |
+| [Trace Commons](datasets/trace-commons.json) | coding agent 会话 | CC-BY-4.0 | 署名后发布加工产物（金标、系统输出、判定；尚未发布） |
 
 - 原始数据不随仓库分发。按清单下载到被 git 忽略的 `tmp/datasets/`，并校验哈希。
 - 不适合公开的内容一律放在 `tmp/`。工具会强制检查：私有会话只能写进 `tmp/`，含原文的报告也只能写进 `tmp/`。
@@ -178,7 +178,7 @@ python3 -m tools.report_split_html <输出路径>.json --output <输出路径>.h
 - **数据**：每个数据集都固定 revision，并记录所用文件的 sha256。
 - **模型**：模型调用记录可获得的模型版本、参数、输入规模、截断信息、提示词版本和哈希；无法获取的字段标为“未记录”。提示词带版本号，见 `tools/model/prompts/`。
 - **缓存**：按输入内容寻址。模型、参数、提示词和输入都相同时直接复用结果，任一项改变就自动重跑；模型的原始返回同时留存，供审计。
-- **中间结果**：许可允许的标注、系统输出和判定，会随报告一起发布，别人可以直接复核或重新评分，不用重复付费调用模型。
+- **中间结果**：许可允许的标注、系统输出和判定，计划随报告一起发布，别人可以直接复核或重新评分，不用重复付费调用模型。2026-11-12 报告的中间结果尚未发布。
 
 ## 仓库结构
 

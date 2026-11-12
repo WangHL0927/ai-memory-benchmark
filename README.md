@@ -64,7 +64,7 @@ Results are in the [2026-11-12 evaluation report](reports/2026-11-12/README.md).
 Requirements: Python 3, using only the standard library; tested on Python 3.14.
 
 ```sh
-git clone <repository-url> && cd <repository-directory>
+git clone https://github.com/WangHL0927/ai-memory-benchmark.git && cd ai-memory-benchmark
 
 # Run unit tests with synthetic data, without external models or products
 python3 -m unittest
@@ -167,7 +167,7 @@ All model requests from the systems under test pass through a local proxy. It va
 | Dataset | Content | License | Published artifacts |
 |---|---|---|---|
 | [HaluMem-Medium](datasets/halumem.json) | Multi-turn everyday conversations with supplied gold labels; see the [usage guide](docs/halumem.md) | CC-BY-NC-ND-4.0 | Scores and hashes only |
-| [Trace Commons](datasets/trace-commons.json) | Coding-agent conversations | CC-BY-4.0 | Processed annotations, system outputs, and judgments with attribution |
+| [Trace Commons](datasets/trace-commons.json) | Coding-agent conversations | CC-BY-4.0 | Processed annotations, system outputs, and judgments with attribution (not yet published) |
 
 - Raw data is not bundled. Download it into the ignored `tmp/datasets/` directory and verify hashes against the manifests.
 - Private content belongs in `tmp/`. The tools enforce output-path restrictions for private conversations and reports containing source text.
@@ -178,7 +178,7 @@ All model requests from the systems under test pass through a local proxy. It va
 - **Data:** each dataset has a pinned revision and file hashes.
 - **Models:** records include the available model version, parameters, input size, truncation information, prompt version, and hash. Unavailable fields are marked “未记录” (“not recorded”). Prompt files are versioned under `tools/model/prompts/`.
 - **Cache:** model results are addressed by content. Reuse requires matching model, parameters, prompt, and input; changes produce a different cache key. Raw model responses are retained for auditing.
-- **Intermediate artifacts:** where licensing permits, annotations, system outputs, and judgments are published with the report so others can inspect or rescore them without repeating model calls.
+- **Intermediate artifacts:** where licensing permits, annotations, system outputs, and judgments are intended for publication with the report so others can inspect or rescore them without repeating model calls. They are not yet published for the 2026-11-12 report.
 
 ## Repository layout
 
