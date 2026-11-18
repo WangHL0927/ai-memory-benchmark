@@ -171,7 +171,9 @@ def model_usage(proxy):
     llm = [row for row in proxy.calls if row['kind'] == 'llm']
     agent = [row for row in llm if row.get('phase') == 'agent']
     review = [row for row in llm if row.get('phase') == 'review']
-    return dict(llm=usage(llm), agent=usage(agent), review=usage(review), embedding=proxy.summary()['embedding'])
+    revise = [row for row in llm if row.get('phase') == 'revise']
+    return dict(llm=usage(llm), agent=usage(agent), review=usage(review), revise=usage(revise),
+                embedding=proxy.summary()['embedding'])
 
 
 def review_metadata(drafts, pages):
@@ -183,10 +185,12 @@ def review_metadata(drafts, pages):
         reason_code = decision.get('routing_reason') or decision.get('reason_category')
         if not reason_code and isinstance(reason, str) and re.fullmatch(r'[a-z][a-z_0-9]+', reason):
             reason_code = reason
+        revision = decision.get('revision')
         result.append(dict(draft_id=draft['id'], op=draft['op'], state=draft['state'],
                            outcome=decision.get('outcome'), reason=reason, reason_code=reason_code,
                            reviewer_type=decision.get('reviewer_type'), model_outcome=decision.get('model_outcome'),
                            rewritten=bool(decision.get('rewritten')), published_page_id=published.get(draft['id']),
+                           revision_moved=(revision['original_space'] != revision['target_space']) if revision else None,
                            last_review_error=draft['last_review_error'], review_attempts=draft['review_attempts']))
     return result
 
@@ -223,7 +227,8 @@ def generate(sample, args, config, package, base_env):
     manifest = dict(sample=sample.name, systems=systems, status='running',
                     product=package, input_sha256=sha256_text(text), time=now())
     proxy = ModelProxy(config, directory, args.request_timeout,
-                       max_input_tokens=MAX_INPUT, stop_file=args.stop_file, track_phase=True)
+                       max_input_tokens=MAX_INPUT, stop_file=args.stop_file, track_phase=True,
+                       revise_model=args.revise_model)
     try:
         tenant = db(args, base_env, 'tenant', tenant=tenant_name, projects=projects)
         scope = dict(tenant_id=tenant['tenant_id'], agent_id=tenant['agent_id'])
@@ -231,6 +236,8 @@ def generate(sample, args, config, package, base_env):
                    HOST='127.0.0.1', PORT=str(args.port), REVIEW_LLM_MODEL=config['model'],
                    REVIEW_LLM_API_KEY='local-proxy', REVIEW_LLM_BASE_URL=proxy.url,
                    REVIEW_LLM_TIMEOUT_MS='90000', REVIEW_INTERVAL_MS='1000')
+        if args.revise_model:
+            env['REVIEW_REVISE_LLM_MODEL'] = args.revise_model
         install = directory / 'client'
         subprocess.run([args.node, str(args.source / args.installer), '--project', str(install)],
                        cwd=directory, env=env, capture_output=True, check=True, timeout=30)
@@ -278,6 +285,7 @@ def generate(sample, args, config, package, base_env):
             raise RuntimeError('X2 原生草案缺非空正文，无法映射到拆分判定格式')
         usage = model_usage(proxy)
         meta = dict(product=package, version=package['version'], llm=config['model'],
+                    revise_llm=args.revise_model,
                     configuration='固定 agent + 原生自动审核', agent=state, reviews=decisions,
                     projects=projects, project_source=project_source,
                     prompt_version=version_line, prompt_sha256=sha256_text(prompt),
@@ -343,6 +351,9 @@ def main():
         if args.stop_file is not None:
             args.stop_file = output_path(args.stop_file)
         config = settings()
+        args.revise_model = os.environ.get('REVIEW_REVISE_LLM_MODEL', '').strip() or None
+        if args.revise_model == config['model']:
+            raise ValueError('独立修订模型必须与摄取及审核模型不同')
         ENVS.mkdir(parents=True, exist_ok=True)
         env = dict(PATH='/usr/bin:/bin:/usr/sbin:/sbin', HOME=str(ENVS), LANG='en_US.UTF-8', DATABASE_URL=url,
                    X2_EVAL_DB=expected_db, X2_EVAL_DB_PORT=str(expected_port))

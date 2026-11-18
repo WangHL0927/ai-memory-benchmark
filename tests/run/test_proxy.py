@@ -143,6 +143,26 @@ class SharedProxyTests(unittest.TestCase):
             audit = json.loads(next(Path(temporary).glob('proxy-error-*.json')).read_text())
             self.assertEqual(audit['product_request']['model'], 'wrong')
 
+    def test_revision_model_is_limited_to_non_agent_calls_and_counted(self):
+        from tools.run.x2 import model_usage
+
+        response = dict(usage=dict(prompt_tokens=3, completion_tokens=2, total_tokens=5))
+        with upstream(response) as (config, seen), tempfile.TemporaryDirectory(dir=TMP) as temporary:
+            with ModelProxy(config, Path(temporary), 5, track_phase=True, revise_model='revision-llm') as proxy:
+                agent = dict(model=config['model'], messages=[], tools=[])
+                review = dict(model=config['model'], messages=[])
+                revise = dict(model='revision-llm', messages=[])
+                for body in (agent, review, revise):
+                    post(proxy, 'chat/completions', body).close()
+                with self.assertRaises(HTTPError) as error:
+                    post(proxy, 'chat/completions', dict(revise, tools=[]))
+                error.exception.close()
+                usage = model_usage(proxy)
+                self.assertEqual([call['phase'] for call in proxy.calls], ['agent', 'review', 'revise'])
+                self.assertEqual(usage['revise']['tokens']['prompt_tokens'], 3)
+                self.assertEqual(usage['llm']['tokens']['prompt_tokens'], 9)
+            self.assertEqual(seen, [agent, review, revise])
+
 
 if __name__ == '__main__':
     unittest.main()
