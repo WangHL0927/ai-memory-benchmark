@@ -1,7 +1,7 @@
-"""ai-memory 3.4.0 single：每样本独立实例，默认 hook 摄取后手动单页整理。
+"""ai-memory single：每样本独立实例，默认 hook 摄取后手动单页整理。
 
 python3 -m tools.run.ai_memory --data-dir tmp/trial/e2e/trace/data
-只使用 brew 保留的 3.4.0 真实二进制，不调用默认链接、宿主 hooks 或现役服务。
+只使用 brew 保留的固定版真实二进制，不调用默认链接、宿主 hooks 或现役服务。
 原生配置依据固定源码 7bb659ceda9cad1c3867079313d6667e2abeb321；
 https://github.com/akitaonrails/ai-memory/tree/v3.4.0
 """
@@ -16,6 +16,7 @@ import re
 import socket
 import sqlite3
 from string import Template
+import shutil
 import subprocess
 import time
 from urllib.parse import urlencode
@@ -25,12 +26,21 @@ import uuid
 from tools.config import sha256_file, environment, sha256_text
 from tools.paths import ROOT, TMP
 from tools.run.proxy import ModelProxy, settings
+from tools.run.project import declared_project
 from tools.trial import batch, identifier, now, output_path, read_json, run_shell, transcript, write_json
 
 VERSION = '3.4.0'
 SYSTEM = 'ai-memory-3.4.0-single-defaults-qwen'
 SOURCE_COMMIT = '7bb659ceda9cad1c3867079313d6667e2abeb321'
-BINARY = Path('/opt/homebrew/Cellar/ai-memory/3.4.0/libexec/ai-memory')
+BINARY = Path(os.getenv('AI_MEMORY_340_BINARY', 'ai-memory'))
+RELEASES = {
+    VERSION: (SYSTEM, SOURCE_COMMIT, BINARY),
+    '3.4.7': (
+        'ai-memory-3.4.7-single-defaults-qwen',
+        'fa0ec25dbe987b7574a7487ecf92f0873040c2f2',
+        Path(os.getenv('AI_MEMORY_347_BINARY', 'ai-memory')),
+    ),
+}
 ENVS = TMP / 'envs/ai-memory'
 TEMPLATE = Path(__file__).with_suffix('') / 'single.toml'
 # 冻结机械排除清单；会话总结是被测产物，必须保留。
@@ -206,16 +216,18 @@ def child_environment(directory):
                 LANG='en_US.UTF-8', NO_COLOR='1', LLM_API_KEY='local-proxy', EMBEDDING_API_KEY='local-proxy')
 
 
-def product_metadata(binary):
+def product_metadata(binary, version=VERSION):
     probe = ENVS / ('version-' + uuid.uuid4().hex)
     for name in ('home', 'temp'):
         (probe / name).mkdir(parents=True, mode=0o700)
     proc = subprocess.run([str(binary), '--version'], cwd=probe, env=child_environment(probe),
                           capture_output=True, text=True, check=True, timeout=10)
-    if proc.stdout.strip() != 'ai-memory ' + VERSION:
-        raise ValueError('必须使用 ai-memory 3.4.0，不能跟随 brew 默认链接')
-    return dict(version=VERSION, binary=str(binary), binary_sha256=sha256_file(binary),
-                source_commit=SOURCE_COMMIT, source_binary_correspondence='发布版本核对；未复现源码构建',
+    if proc.stdout.strip() != 'ai-memory ' + version:
+        raise ValueError(f'必须使用 ai-memory {version}，不能跟随 brew 默认链接')
+    system, source_commit, _ = RELEASES[version]
+    return dict(version=version, system=system, binary=str(binary), binary_sha256=sha256_file(binary),
+                source_commit=source_commit, source_tag=f'v{version}',
+                source_binary_correspondence='发布版本核对；未复现源码构建',
                 template_sha256=sha256_file(TEMPLATE),
                 adapter_sha256=sha256_file(Path(__file__)),
                 proxy_sha256=sha256_file(Path(__file__).with_name('proxy.py')),
@@ -223,7 +235,7 @@ def product_metadata(binary):
 
 
 @contextmanager
-def isolated_server(binary, directory, config, proxy, startup_timeout):
+def isolated_server(binary, directory, config, proxy, startup_timeout, *, project=None, native_vectors=False):
     """全新数据目录、空 HOME、随机端口；仅在本进程成功绑定后连接该端口。"""
     for name in ('home', 'temp'):
         (directory / name).mkdir()
@@ -234,12 +246,14 @@ def isolated_server(binary, directory, config, proxy, startup_timeout):
                      embedding_model=json.dumps(config['embedding_model']), dimensions=config['dimensions'],
                      request_timeout=math.ceil(proxy.timeout))
     rendered = Template(TEMPLATE.read_text()).substitute(variables)
+    if native_vectors:
+        rendered = '\n'.join(line for line in rendered.split('\n') if not line.startswith('embedding_'))
     conf_path = directory / 'config.toml'
     conf_path.write_text(rendered)
     os.chmod(conf_path, 0o600)
     write_json(directory / 'configuration.json', dict(template_sha256=sha256_file(TEMPLATE),
                                                      rendered_sha256=sha256_text(rendered), config=rendered))
-    project = 'sample-' + directory.parent.name
+    project = project or 'sample-' + directory.parent.name
     command = [str(binary), '--data-dir', str(directory / 'store'), '--config', str(conf_path),
                'serve', '--transport', 'http', '--bind', f'127.0.0.1:{port}', '--no-watcher',
                '--workspace', 'eval', '--project', project]
@@ -278,8 +292,11 @@ def isolated_server(binary, directory, config, proxy, startup_timeout):
                 raise RuntimeError('实验服务非正常退出，见独立 server.log')
 
 
-def generate(sample, args, config, package):
-    target = output_path(sample / 'runs' / (SYSTEM + '.json'), sample.parent)
+def generate(sample, args, config, package, *, max_input_tokens=None, stop_file=None):
+    if stop_file is not None and stop_file.exists():
+        raise SystemExit('评测输入 token 已达到停止条件')
+    system, version = package.get('system', SYSTEM), package.get('version', VERSION)
+    target = output_path(sample / 'runs' / (system + '.json'), sample.parent)
     if target.exists() and not args.force:
         return 'skipped'
     text = (sample / 'transcript.md').read_text(encoding='utf-8')
@@ -287,13 +304,17 @@ def generate(sample, args, config, package):
     started = time.monotonic()
     directory = ENVS / sample.name / uuid.uuid4().hex
     directory.mkdir(parents=True, mode=0o700)
-    manifest = dict(sample=sample.name, system=SYSTEM, time=now(), status='running', product=package,
+    manifest = dict(sample=sample.name, system=system, time=now(), status='running', product=package,
                     input_sha256=sha256_text(text), raw_directory=str(directory.relative_to(ROOT)),
                     environment=environment(), timeout_seconds=args.timeout)
-    proxy = ModelProxy(config, directory, args.request_timeout)
+    proxy = ModelProxy(config, directory, args.request_timeout,
+                       max_input_tokens=max_input_tokens, stop_file=stop_file)
     try:
         with proxy:
-            with isolated_server(args.binary, directory, config, proxy, args.startup_timeout) as (base, project):
+            native = {}
+            if getattr(args, 'v07', False):
+                native = dict(project=declared_project(text), native_vectors=True)
+            with isolated_server(args.binary, directory, config, proxy, args.startup_timeout, **native) as (base, project):
                 session_id = str(uuid.uuid4())
                 events, capture = replay_requests(text, base, session_id, project, directory)
                 write_json(directory / 'replay.json', dict(events=events, **capture))
@@ -331,18 +352,21 @@ def generate(sample, args, config, package):
                 raise RuntimeError('模型调用缺失或失败，禁止提交空结果')
             if any('length' in c.get('finish_reasons', []) for c in proxy.calls):
                 raise RuntimeError('模型输出被上限截断')
+            if proxy.input_limit_exceeded:
+                raise RuntimeError('样本超过输入 token 上限')
         values = [native_to_draft(r) for r in records]
         # 产品已经退出后才读取金标外壳，U/N 从不交给被测进程。
         gold = read_json(sample / 'gold.json')
         prompt_hashes = {str(c['index']): sha256_text(json.dumps(read_json(ROOT / c['raw_path'])['request']['messages'],
                          ensure_ascii=False, sort_keys=True)) for c in proxy.calls if c['kind'] == 'llm'}
-        meta = dict(name=SYSTEM, version=VERSION, configuration='single', product=package, source_commit=SOURCE_COMMIT,
+        meta = dict(name=system, version=version, configuration='single', product=package,
+                    source_commit=package.get('source_commit', SOURCE_COMMIT),
                     deployment='brew 固定版本真实二进制 / 每样本独立 HOME、进程、端口、数据库',
                     llm=config['model'], base_url=config['base_url'],
                     parameters=proxy.parameters(),
                     embedding_model=config['embedding_model'], embedding=dict(dimensions=config['dimensions'],
                         normalization='未记录；适配器不额外归一化', chunking='产品原生默认；见原始请求'),
-                    prompt_version='ai-memory v3.4.0 原生 single', prompt_sha256=prompt_hashes,
+                    prompt_version=f'ai-memory v{version} 原生 single', prompt_sha256=prompt_hashes,
                     input_sha256=sha256_text(text), output_sha256=sha256_text(json.dumps(values, ensure_ascii=False, sort_keys=True)),
                     raw_directory=str(directory.relative_to(ROOT)), raw_export_sha256=sha256_file(directory / 'export.json'),
                     usage=proxy.summary(), calls=proxy.calls, proxy_errors=proxy.errors,
@@ -352,7 +376,13 @@ def generate(sample, args, config, package):
                         auto_improve=False, maintenance=False, profile=False, dream=False, watcher=False, manual_consolidations=1),
                     timeout=dict(seconds=args.timeout, occurred=False), retries='适配器不重试；产品重试见逐调用审计',
                     dataset_manifest='见样本来源；版本未记录', environment=environment())
-        write_json(target, run_shell(gold, meta, values), overwrite=args.force)
+        run = run_shell(gold, meta, values)
+        if getattr(args, 'v07', False):
+            meta['embedding_model'] = 'all-MiniLM-L6-v2'
+            meta['embedding'] = dict(provider='native-local', dimensions=384)
+            for item, record in zip(run['D'], records):
+                item['reader_metadata'] = dict(scope='project:' + record['project'], source=record['path'])
+        write_json(target, run, overwrite=args.force)
         manifest.update(status='written', output=str(target.relative_to(ROOT)), exported=len(values),
                         run_sha256=sha256_file(target))
         print(f"{sample.name}：{meta['elapsed_seconds']:.1f}s；LLM={meta['usage']['llm']['calls']}；"
@@ -361,33 +391,50 @@ def generate(sample, args, config, package):
     except BaseException as exc:
         manifest.update(status='failed', error_type=type(exc).__name__, timed_out=isinstance(exc, TimeoutError),
                         detail=str(exc) if isinstance(exc, RuntimeError) else None)
+        if proxy.input_limit_exceeded:
+            raise SystemExit('样本超过输入 token 上限，停止评测') from None
         raise
     finally:
         manifest.update(elapsed_seconds=round(time.monotonic() - started, 3), usage=proxy.summary(), parameters=proxy.parameters(),
-                        calls=proxy.calls, proxy_errors=proxy.errors)
+                        calls=proxy.calls, proxy_errors=proxy.errors, input_limit_exceeded=proxy.input_limit_exceeded)
         write_json(directory / 'manifest.json', manifest)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-dir', type=Path, required=True)
-    parser.add_argument('--binary', type=Path, default=BINARY)
+    parser.add_argument('--v07', action='store_true', help='使用 v0.7 项目头部和原生向量默认值')
+    parser.add_argument('--product-version', choices=RELEASES, default=VERSION)
+    parser.add_argument('--binary', type=Path)
     parser.add_argument('--timeout', type=float, default=900)
     parser.add_argument('--request-timeout', type=float, default=120)
     parser.add_argument('--startup-timeout', type=float, default=60)
     parser.add_argument('--force', action='store_true')
     parser.add_argument('--failures', type=Path, default=TMP / 'trial/ai-memory-failures.json')
     parser.add_argument('--concurrency', type=int, default=1, help='同时处理的样本数；每个样本独立进程、端口和存储')
+    parser.add_argument('--max-input-tokens', type=int, help='停止评测的单样本输入 token 上限')
+    parser.add_argument('--stop-file', type=Path, help='跨适配器共享评测停止状态（限 tmp/）')
     args = parser.parse_args()
     try:
-        if any(not math.isfinite(v) or v <= 0 for v in (args.timeout, args.request_timeout, args.startup_timeout)):
+        if (any(not math.isfinite(v) or v <= 0 for v in (args.timeout, args.request_timeout, args.startup_timeout))
+                or (args.max_input_tokens is not None and args.max_input_tokens <= 0)):
             raise ValueError('超时必须是有限正数')
-        args.binary = args.binary.resolve(strict=True)
+        binary = args.binary or RELEASES[args.product_version][2]
+        if args.binary is None and binary == Path('ai-memory'):
+            brew = shutil.which('brew')
+            if brew is None:
+                raise ValueError('需要固定版本的 --binary')
+            cellar = Path(subprocess.check_output([brew, '--cellar', 'ai-memory'], text=True).strip())
+            binary = cellar / args.product_version / 'libexec/ai-memory'
+        args.binary = binary.resolve(strict=True)
+        if args.stop_file is not None:
+            args.stop_file = output_path(args.stop_file)
         config = settings()
         # 生成参数沿用产品默认；代理只校验模型并记录实际请求。
-        package = product_metadata(args.binary)
+        package = product_metadata(args.binary, args.product_version)
         return batch(sorted(p.parent for p in args.data_dir.glob('*/gold.json')),
-                     lambda p: generate(p, args, config, package), args.failures, concurrency=args.concurrency)
+                     lambda p: generate(p, args, config, package, max_input_tokens=args.max_input_tokens,
+                                        stop_file=args.stop_file), args.failures, concurrency=args.concurrency)
     except (ValueError, OSError, subprocess.SubprocessError):
         parser.exit(2, '错误：配置或固定版本二进制无效，请核查 .env 和隔离环境\n')
 

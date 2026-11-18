@@ -34,10 +34,13 @@ def settings():
 
 class ModelProxy:
     """只在内存持有真实 key；不保存 HTTP headers，不让产品进程接触 key。"""
-    def __init__(self, config, directory, timeout):
+    def __init__(self, config, directory, timeout, *, max_input_tokens=None, stop_file=None, track_phase=False):
         self.config, self.directory, self.timeout = config, directory, timeout
         self.calls, self.lock = [], threading.Lock()
         self.errors = []
+        self.max_input_tokens = max_input_tokens
+        self.input_tokens = 0
+        self.input_limit_exceeded = False
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -56,10 +59,14 @@ class ModelProxy:
                     if body.get('model') != expected:
                         raise RuntimeError('产品请求了非指定模型')
                     with owner.lock:
+                        if owner.input_limit_exceeded or (stop_file is not None and stop_file.exists()):
+                            raise RuntimeError('评测输入 token 已达到停止条件')
                         index = len(owner.calls) + 1
                         record.update(kind=kind, index=index, time=now(), status='pending',
                                       parameters={k: body[k] for k in (LLM_FIELDS if kind == 'llm' else ('dimensions',)) if k in body})
                         owner.calls.append(record)
+                    if kind == 'llm' and track_phase:
+                        record['phase'] = 'agent' if 'tools' in body else 'review'
                     payload = json.dumps(body, ensure_ascii=False).encode()
                     request = Request(config['base_url'] + self.path.removeprefix('/v1'), data=payload,
                                       headers={'Content-Type': 'application/json',
@@ -99,6 +106,15 @@ class ModelProxy:
                     except ValueError:
                         pass  # 计量缺失不改变服务端响应。
                     usage = next((v['usage'] for v in reversed(values) if v.get('usage')), None)
+                    if isinstance(usage, dict) and type(usage.get('prompt_tokens')) is int:
+                        with owner.lock:
+                            owner.input_tokens += usage['prompt_tokens']
+                            owner.input_limit_exceeded = (
+                                owner.max_input_tokens is not None
+                                and owner.input_tokens > owner.max_input_tokens
+                            )
+                            if owner.input_limit_exceeded and stop_file is not None:
+                                stop_file.touch()
                     finishes = [c.get('finish_reason') for v in values for c in (v.get('choices') or [])
                                 if isinstance(c, dict) and c.get('finish_reason')]
                     record.update(status=status, usage=usage or '未记录', finish_reasons=finishes,

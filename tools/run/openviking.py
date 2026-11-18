@@ -1,4 +1,4 @@
-"""OpenViking 0.5.4.1：每样本独立空库，只导出原生长期记忆 L2。
+"""OpenViking 0.5.4.1：每样本独立空库，导出原生长期记忆 L2 与 v0.7 会话附件。
 
 先安装：UV_CACHE_DIR=$PWD/tmp/envs/.uv-cache uv pip install \
     --python tmp/envs/openviking/bin/python openviking==0.5.4.1
@@ -30,11 +30,16 @@ SYSTEM = 'openviking-0.5.4.1-ltm-defaults'
 SOURCE_COMMIT = '86edb40a01733490b930266dcfcab7c2cebf94b3'
 
 
-def transcript_to_messages(text):
+def transcript_to_messages(text, *, include_header=False):
     """工具块保留在助手正文里，既不解释也不执行；T 编号机械写入 turn_id。"""
     _, turns = transcript(text)
-    return [dict(role={'用户': 'user', '助手': 'assistant'}[t['role']],
-                 content=t['text'], turn_id=f"T{t['turn']}") for t in turns]
+    messages = [dict(role={'用户': 'user', '助手': 'assistant'}[t['role']],
+                     content=t['text'], turn_id=f"T{t['turn']}") for t in turns]
+    if include_header:
+        first_turn = next(i for i, line in enumerate(text.splitlines(keepends=True)) if line.startswith('## [T'))
+        header = ''.join(text.splitlines(keepends=True)[:first_turn])
+        messages[0]['content'] = header + messages[0]['content']
+    return messages
 
 
 def native_to_draft(record):
@@ -209,15 +214,18 @@ def wait_commit(base, commit, deadline, poll):
 
 
 def generate(sample, args, config, package):
-    target = output_path(sample / 'runs' / (SYSTEM + '.json'), sample.parent)
+    gold = read_json(sample / 'gold.json')
+    new_protocol = gold['standard_version'] == 'v0.7'
+    system = SYSTEM + '-v07' if new_protocol else SYSTEM
+    target = output_path(sample / 'runs' / (system + '.json'), sample.parent)
     if target.exists() and not args.force:
         return 'skipped'
     text = (sample / 'transcript.md').read_text(encoding='utf-8')
-    messages = transcript_to_messages(text)
+    messages = transcript_to_messages(text, include_header=new_protocol)
     started = time.monotonic()
     directory = TMP / 'openviking' / (sample.name + '-' + uuid.uuid4().hex)
     directory.mkdir(parents=True, mode=0o700)
-    manifest = dict(sample=sample.name, system=SYSTEM, time=now(), input_sha256=sha256_text(text),
+    manifest = dict(sample=sample.name, system=system, time=now(), input_sha256=sha256_text(text),
                     raw_directory=str(directory.relative_to(ROOT)), timeout_seconds=args.timeout,
                     status='running', product=package)
     proxy = ModelProxy(config, directory, args.request_timeout)
@@ -261,6 +269,11 @@ def generate(sample, args, config, package):
                 raise RuntimeError('memory_diff 与最终枚举不一致')
             all_records = [dict(uri=u, content=c) for u, c in sorted(changed.items())]
             records, excluded = select_records(all_records, package['initial_templates'])
+            if new_protocol:
+                attachment = archive + '/messages.jsonl'
+                if 'messages.jsonl' not in names:
+                    raise RuntimeError('归档缺少产品原生会话附件')
+                records.append(dict(uri=attachment, content=read_content(base, attachment), kind='conversation_attachment'))
             manifest['excluded_initial_templates'] = excluded
             values = [native_to_draft(r) for r in records]
             write_json(directory / 'export.json', dict(records=records, all_records=all_records, excluded_initial_templates=excluded, memory_diff=diff, task=task,
@@ -269,9 +282,8 @@ def generate(sample, args, config, package):
                 raise RuntimeError('模型调用曾失败，见脱敏调用审计')
             if any('length' in c.get('finish_reasons', []) for c in proxy.calls):
                 raise RuntimeError('模型输出达到上限被截断')
-        # gold 仅在产品退出后读取外壳，不把标注内容交给产品。
-        gold = read_json(sample / 'gold.json')
-        meta = dict(name=SYSTEM, version=VERSION, deployment='venv / 每样本独立进程和 workspace',
+        # gold 中只有版本与运行外壳用于适配器控制，标注内容不交给产品。
+        meta = dict(name=system, version=VERSION, deployment='venv / 每样本独立进程和 workspace',
                     source_commit=SOURCE_COMMIT, package=package, llm=config['model'],
                     excluded_initial_templates=excluded,
                     base_url=config['base_url'], parameters=proxy.parameters(),
@@ -282,14 +294,20 @@ def generate(sample, args, config, package):
                     usage=proxy.summary(), calls=proxy.calls, time=now(), environment=environment(),
                     elapsed_seconds=round(time.monotonic() - started, 3),
                     context=dict(window='未记录', input_characters=len(text), message_characters=sum(len(m['content']) for m in messages),
-                                 header_metadata_forwarded=False, adapter_input_truncated=False,
+                                 header_metadata_forwarded=new_protocol, adapter_input_truncated=False,
                                  source_truncation_markers=text.count('截断'), product_input_truncated='未记录',
                                  output_truncated=False), timeout=dict(seconds=args.timeout, occurred=False),
                     retries='见逐调用审计；产品内部重试次数未记录', raw_directory=str(directory.relative_to(ROOT)),
                     raw_export_sha256=sha256_file(directory / 'export.json'),
                     dataset_manifest='见样本来源；版本未记录', isolation=dict(auto_commit=False, working_memory=False,
                     skill_extraction=False, agent_evolution=False), output_sha256=sha256_text(json.dumps(values, ensure_ascii=False, sort_keys=True)))
-        write_json(target, run_shell(gold, meta, values), overwrite=args.force)
+        run = run_shell(gold, meta, values)
+        if new_protocol:
+            for item, record in zip(run['D'], records):
+                # Retain the reader-visible location without the product URI scheme.
+                item['reader_metadata'] = dict(source=record['uri'].split('://', 1)[-1],
+                                               title='Conversation attachment' if record.get('kind') else '')
+        write_json(target, run, overwrite=args.force)
         manifest.update(status='written', output=str(target.relative_to(ROOT)), exported=len(values),
                         run_sha256=sha256_file(target))
         print(f"{sample.name}：{meta['elapsed_seconds']:.1f}s；LLM={meta['usage']['llm']['calls']}；"

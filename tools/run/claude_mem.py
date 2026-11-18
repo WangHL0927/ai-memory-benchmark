@@ -11,6 +11,7 @@ from collections import Counter
 from contextlib import closing, contextmanager
 import json
 import math
+import os
 from pathlib import Path
 import re
 import shutil
@@ -25,6 +26,7 @@ import uuid
 from tools.config import sha256_file, environment, sha256_text
 from tools.paths import ROOT, TMP
 from tools.run.proxy import ModelProxy, settings
+from tools.run.project import declared_project
 from tools.trial import batch, identifier, now, output_path, read_json, run_shell, transcript, write_json
 
 VERSION = '15.17.0'
@@ -231,6 +233,17 @@ def isolated_worker(args, directory, config, proxy):
         sock.bind(('127.0.0.1', 0))
         port = sock.getsockname()[1]
     env = child_environment(directory, config, proxy, port)
+    if getattr(args, 'v07', False):
+        env.pop('CLAUDE_MEM_CHROMA_ENABLED')
+        env.pop('CLAUDE_MEM_SERVER_VECTOR_SEARCH')
+        uvx = shutil.which('uvx')
+        if uvx:
+            env['PATH'] = str(Path(uvx).parent) + ':' + env['PATH']
+        env.update(CLAUDE_MEM_CHROMA_MODE='local',
+                   CLAUDE_MEM_WORK_VIEW_AUTO_REFRESH='false', CLAUDE_MEM_WORK_STATE_ENABLED='false',
+                   CLAUDE_MEM_CHROMA_PREWARM_TIMEOUT_MS='180000',
+                   UV_CACHE_DIR=os.environ.get('V07_CHROMA_CACHE', str(directory / 'temp/uv')),
+                   UV_PYTHON_INSTALL_DIR=str(directory / 'temp/python'))
     write_json(directory / 'configuration.json', env)
     # --daemon 是前台 worker 入口；不用 start 的查找、抢占、后台派生逻辑。
     command = [str(args.bun), '--preload', str(GUARD), str(args.package / 'plugin/scripts/worker-service.cjs'), '--daemon']
@@ -339,7 +352,8 @@ def generate(sample, args, config, package):
         with proxy:
             with isolated_worker(args, directory, config, proxy) as (base, process):
                 session_id = 'eval-' + uuid.uuid4().hex
-                events, capture = replay_requests(text, session_id, 'sample-' + sample.name, directory / 'work')
+                project = declared_project(text) if getattr(args, 'v07', False) else 'sample-' + sample.name
+                events, capture = replay_requests(text, session_id, project, directory / 'work')
                 write_json(directory / 'replay.json', dict(events=events, capture=capture))
                 deadline, acknowledgements = time.monotonic() + args.timeout, []
                 # 产品自身的跳过、丢弃、截断属于默认行为：只计数写进运行记录，不判失败。
@@ -348,7 +362,8 @@ def generate(sample, args, config, package):
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         raise TimeoutError('会话回放总时限已过')
-                    ack = http(base, event['path'], event['body'], timeout=min(30, remaining))
+                    request_window = args.request_timeout if getattr(args, 'v07', False) else 30
+                    ack = http(base, event['path'], event['body'], timeout=min(request_window, remaining))
                     acknowledgements.append(dict(index=index, response=ack))
                     write_json(directory / 'acknowledgements.json', acknowledgements)
                     if event['path'].endswith('/init'):
@@ -409,8 +424,17 @@ def generate(sample, args, config, package):
                                    fallback=False, cloud_sync=False, transcript_watcher=False, auto_update=False),
                     timeout=dict(seconds=args.timeout, occurred=False), retries='适配器不重试；产品内部重试见调用审计',
                     dataset_manifest='见样本来源；版本未记录')
+        if getattr(args, 'v07', False):
+            meta['configuration'] = 'openai-compatible-native-local-chroma'
+            meta['embedding'] = dict(enabled=True, provider='native-local', external_proxy=False)
+            meta['isolation'].update(chroma=True, vector_search='product default')
         # 进程退出后才读 gold 的运行外壳，金标内容不交给被测产品。
-        write_json(target, native_run(read_json(sample / 'gold.json'), meta, records), overwrite=args.force)
+        run = native_run(read_json(sample / 'gold.json'), meta, records)
+        if getattr(args, 'v07', False):
+            for item, record in zip(run['D'], records):
+                if record.get('project'):
+                    item['reader_metadata'] = dict(scope='project:' + record['project'])
+        write_json(target, run, overwrite=args.force)
         manifest.update(status='written', output=str(target.relative_to(ROOT)), exported=len(values),
                         run_sha256=sha256_file(target))
         print(f"{sample.name}：{meta['elapsed_seconds']:.1f}s；LLM={meta['usage']['llm']['calls']}；"
@@ -429,6 +453,7 @@ def generate(sample, args, config, package):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-dir', type=Path, required=True)
+    parser.add_argument('--v07', action='store_true', help='使用 v0.7 项目头部和原生向量默认值')
     parser.add_argument('--package', type=Path, default=PACKAGE)
     parser.add_argument('--bun', type=Path, default=Path(shutil.which('bun') or 'bun'))
     parser.add_argument('--timeout', type=float, default=1800)

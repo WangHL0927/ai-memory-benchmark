@@ -216,3 +216,14 @@ python3 -m unittest
 ```
 
 `tests/fixtures/` 全部是合成数据。测试不访问外部模型或产品；模型 CLI 使用假实现，HTTP 接口由本机合成服务提供。
+
+## v0.7.1 缩减轮
+
+本轮流程、固定样本、按题要点计分和跨 tokenizer 的写入成本见 [v0.7.1 框架](../docs/framework.md)。较早的拆分判定入口继续使用 [v0.6 框架](../docs/framework-v0.6.md)。
+
+1. 在独立 Python 环境安装 `tiktoken==0.14.0`。用 `python -m tools.model.v07.cohort --reduced` 校验并登记源材料。运行前把既有转换结果和 HaluMem 原始 JSONL 放在私有目录，用 `--history`、`--halumem-source`、`--output` 传入。正式样本目录只能位于被忽略的 `tmp/`。
+2. 用 `python -m tools.model.v07.pipeline annotate --data-dir <样本目录>` 冻结金标、题卡及唯一版本的 transcript。各产品在独立空存储重放同一份冻结 transcript，生成 `runs/`。ai-memory、claude-mem 和 Basic Memory 通过 `--v07` 进入本轮路径。OpenViking 从冻结金标读取框架版本，v0.7 保留项目头部和原生会话附件。产品配置、捕获默认行为和真实用量保留在私有 run 与 manifest 中。
+3. 用 `python -m tools.model.v07.pipeline evaluate --data-dir <样本目录>` 作答及判分。公开题面必须写出题卡的截点，修改题面后应在新产物目录作答。基线随 coding 样本执行。需要时用 `python -m tools.model.v07.adjudicate --data-dir <样本目录>` 统一复核可能有缺陷的题目。
+4. 用 `python -m tools.model.v07.report --data-dir <样本目录> --output-dir <私有输出目录> --date <日期>` 复算汇总。若有经核实的全组撤销题目，用 `--task-exclusions` 传入。先核查私有输出，只发布允许公开的汇总。
+
+X2 是未公开的内部系统。安装器和生成技能的位置分别通过 `X2_INSTALLER_RELATIVE`、`X2_GENERATED_SKILL_RELATIVE` 传入相对于运行目录的路径。源码目录、回环服务端口、独立评测数据库名、数据库端口和凭据文件分别通过 `X2_REPO`、`X2_PORT`、`X2_DATABASE_NAME`、`X2_DATABASE_PORT`、`X2_DATABASE_URL_FILE` 传入。数据库适配器要求本地专用数据库和角色，启动前检查 PostgreSQL 实际库名与角色。原始模型输入、输出和凭据都留在本地。
