@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -142,6 +143,34 @@ class SharedProxyTests(unittest.TestCase):
             self.assertEqual(seen, [])
             audit = json.loads(next(Path(temporary).glob('proxy-error-*.json')).read_text())
             self.assertEqual(audit['product_request']['model'], 'wrong')
+
+    def test_revision_model_is_limited_to_non_agent_calls_and_counted(self):
+        from tools.run.x2 import model_usage
+
+        response = dict(usage=dict(prompt_tokens=3, completion_tokens=2, total_tokens=5))
+        with upstream(response) as (config, seen), tempfile.TemporaryDirectory(dir=TMP) as temporary:
+            with (ModelProxy(config, Path(temporary), 5, track_phase=True,
+                             revise_model='revision-llm', revise_timeout=9, revise_json_keyword=True) as proxy,
+                  patch('tools.run.proxy.urlopen', wraps=urlopen) as upstream_call):
+                agent = dict(model=config['model'], messages=[], tools=[])
+                review = dict(model=config['model'], messages=[])
+                revise = dict(model='revision-llm', messages=[dict(role='system', content='Preserve the evidence.')],
+                              response_format=dict(type='json_object'))
+                for body in (agent, review, revise):
+                    post(proxy, 'chat/completions', body).close()
+                with self.assertRaises(HTTPError) as error:
+                    post(proxy, 'chat/completions', dict(revise, tools=[]))
+                error.exception.close()
+                usage = model_usage(proxy)
+                self.assertEqual([call['phase'] for call in proxy.calls], ['agent', 'review', 'revise'])
+                self.assertEqual(usage['revise']['tokens']['prompt_tokens'], 3)
+                self.assertEqual(usage['llm']['tokens']['prompt_tokens'], 9)
+                self.assertEqual([call.kwargs['timeout'] for call in upstream_call.call_args_list], [5, 5, 9])
+            forwarded = dict(revise, messages=[dict(role='system', content='Preserve the evidence.\n\nReturn a JSON object.')])
+            self.assertEqual(seen, [agent, review, forwarded])
+            audit = json.loads((Path(temporary) / 'call-0003.json').read_text())
+            self.assertEqual(audit['product_request'], revise)
+            self.assertEqual(audit['request'], forwarded)
 
 
 if __name__ == '__main__':

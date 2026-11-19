@@ -82,7 +82,7 @@ def transcript(text):
 
 
 def section(number):
-    text = (ROOT / 'docs/framework.md').read_text(encoding='utf-8')
+    text = (ROOT / 'docs/framework-v0.6.md').read_text(encoding='utf-8')
     marker = f'## {number}. '
     start = text.index(marker)
     following = re.search(r'\n## ', text[start:])
@@ -126,6 +126,8 @@ def batch(tasks, worker, failures, concurrency=1, max_consecutive_failures=3):
     log_path = log_dir / f"{Path(failure_path).parent.name}-{Path(failure_path).stem}-{now().replace(':', '')}.log"
     lock, state = threading.Lock(), dict(streak=0, stopped=False)
     tasks = list(tasks)
+    if os.environ.get('BENCHMARK_CONTINUE_SAMPLE_FAILURES') == '1':
+        max_consecutive_failures = max(max_consecutive_failures, len(tasks) + 1)
 
     def log(line):
         with lock, open(log_path, 'a', encoding='utf-8') as stream:

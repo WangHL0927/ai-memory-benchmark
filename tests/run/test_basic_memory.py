@@ -217,12 +217,37 @@ for line in sys.stdin:
                 self.assertEqual(calls, [])
 
     def test_tool_refusal_returned_and_unknown_tool_rejected(self):
-        state, seen, audit = self.run_agent([response([('bm_write', {})]), response()],
-            lambda n, a: dict(isError=True, content=[dict(type='text', text='合成冲突')]))
+        state, seen, audit = self.run_agent(
+            [response([('bm_write', {})]), response([('bm_write', {'title': 'new'})]), response()],
+            lambda n, a: {} if a else dict(isError=True, content=[dict(type='text', text='合成冲突')]))
         self.assertEqual(state['tool_calls'][0]['status'], 'error')
         self.assertIn('合成冲突', seen[1]['messages'][-1]['content'])
+        self.assertEqual(state['correction_turns'], 1)
         with self.assertRaises(RuntimeError):
             self.run_agent([response([('shell', dict(command='不执行'))])], lambda n, a: self.fail('不应执行'))
+
+    def test_bad_json_is_reported_then_corrected_without_forwarding_bad_arguments(self):
+        bad = response([('bm_write', {})])
+        bad['choices'][0]['message']['tool_calls'][0]['function']['arguments'] = '{"title":'
+        forwarded = []
+        state, seen, _ = self.run_agent(
+            [bad, response([('bm_write', {'title': 'valid'})]), response()],
+            lambda name, arguments: forwarded.append(arguments) or {})
+        self.assertEqual(forwarded, [dict(title='valid')])
+        self.assertEqual(state['correction_turns'], 1)
+        self.assertEqual(seen[1]['messages'][-2]['tool_calls'][0]['function']['arguments'], '{}')
+        self.assertIn('Invalid tool arguments', seen[1]['messages'][-1]['content'])
+
+    def test_two_corrections_are_the_sample_limit(self):
+        state = {}
+        failures = [response([('bm_write', {})]), response(), response()]
+        with tempfile.TemporaryDirectory(dir=TMP) as directory, fake_openai(failures) as (url, seen):
+            with self.assertRaisesRegex(RuntimeError, '两次纠正机会'):
+                agent_loop(url, 'fake', 'p', 'h', tools(), lambda n, a: dict(isError=True),
+                           state, Path(directory))
+        self.assertEqual(state['correction_turns'], 2)
+        self.assertEqual(len(seen), 3)
+        self.assertEqual(state['stop_reason'], 'tool_corrections_exhausted')
 
     def test_mcp_timeout_is_bounded(self):
         process = subprocess.Popen([sys.executable, '-u', '-c', 'import time; time.sleep(10)'],

@@ -34,10 +34,14 @@ def settings():
 
 class ModelProxy:
     """只在内存持有真实 key；不保存 HTTP headers，不让产品进程接触 key。"""
-    def __init__(self, config, directory, timeout):
+    def __init__(self, config, directory, timeout, *, max_input_tokens=None, stop_file=None, track_phase=False,
+                 revise_model=None, revise_timeout=None, revise_json_keyword=False):
         self.config, self.directory, self.timeout = config, directory, timeout
         self.calls, self.lock = [], threading.Lock()
         self.errors = []
+        self.max_input_tokens = max_input_tokens
+        self.input_tokens = 0
+        self.input_limit_exceeded = False
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -52,23 +56,39 @@ class ModelProxy:
                     kind = {'/v1/chat/completions': 'llm', '/v1/embeddings': 'embedding'}.get(self.path)
                     if kind is None:
                         raise RuntimeError('非预期模型路径')
-                    expected = config['model'] if kind == 'llm' else config['embedding_model']
-                    if body.get('model') != expected:
+                    requested = body.get('model')
+                    phase = 'agent' if 'tools' in body else 'review'
+                    if kind == 'llm' and phase == 'review' and revise_model and requested == revise_model:
+                        phase = 'revise'
+                    expected = config['embedding_model'] if kind == 'embedding' else (
+                        revise_model if phase == 'revise' else config['model'])
+                    if requested != expected:
                         raise RuntimeError('产品请求了非指定模型')
+                    if phase == 'revise' and revise_json_keyword and body.get('response_format') == {'type': 'json_object'}:
+                        # The provider requires a literal JSON keyword for JSON object mode.
+                        system = body['messages'][0]
+                        if system['role'] != 'system':
+                            raise RuntimeError('修订请求缺少系统提示')
+                        system['content'] += '\n\nReturn a JSON object.'
                     with owner.lock:
+                        if owner.input_limit_exceeded or (stop_file is not None and stop_file.exists()):
+                            raise RuntimeError('评测输入 token 已达到停止条件')
                         index = len(owner.calls) + 1
                         record.update(kind=kind, index=index, time=now(), status='pending',
                                       parameters={k: body[k] for k in (LLM_FIELDS if kind == 'llm' else ('dimensions',)) if k in body})
                         owner.calls.append(record)
+                    if kind == 'llm' and track_phase:
+                        record['phase'] = phase
                     payload = json.dumps(body, ensure_ascii=False).encode()
                     request = Request(config['base_url'] + self.path.removeprefix('/v1'), data=payload,
                                       headers={'Content-Type': 'application/json',
                                                'Authorization': 'Bearer ' + config['key']})
                     # 服务端限流（429，或 503 / ServiceUnavailable）时在代理里退避重试，最多 3 次，产品侧无感；
                     # 重试次数写进记录。其他错误原样返回给产品。
+                    upstream_timeout = (revise_timeout or owner.timeout) if phase == 'revise' else owner.timeout
                     for retry in range(4):
                         try:
-                            with urlopen(request, timeout=owner.timeout) as response:
+                            with urlopen(request, timeout=upstream_timeout) as response:
                                 raw, status = response.read(), response.status
                                 content_type = response.headers.get('Content-Type', 'application/json')
                         except HTTPError as exc:
@@ -99,6 +119,15 @@ class ModelProxy:
                     except ValueError:
                         pass  # 计量缺失不改变服务端响应。
                     usage = next((v['usage'] for v in reversed(values) if v.get('usage')), None)
+                    if isinstance(usage, dict) and type(usage.get('prompt_tokens')) is int:
+                        with owner.lock:
+                            owner.input_tokens += usage['prompt_tokens']
+                            owner.input_limit_exceeded = (
+                                owner.max_input_tokens is not None
+                                and owner.input_tokens > owner.max_input_tokens
+                            )
+                            if owner.input_limit_exceeded and stop_file is not None:
+                                stop_file.touch()
                     finishes = [c.get('finish_reason') for v in values for c in (v.get('choices') or [])
                                 if isinstance(c, dict) and c.get('finish_reason')]
                     record.update(status=status, usage=usage or '未记录', finish_reasons=finishes,

@@ -10,6 +10,7 @@ from inspect import getsource
 from contextlib import contextmanager
 import json
 import math
+import os
 from pathlib import Path
 import queue
 import re
@@ -23,6 +24,7 @@ import uuid
 from tools.config import sha256_file, environment, sha256_text
 from tools.paths import ROOT, TMP
 from tools.run.proxy import ModelProxy, settings
+from tools.run.project import declared_project
 from tools.trial import batch, now, output_path, read_json, run_shell, transcript, write_json
 
 VERSION = '1.0.0'
@@ -79,7 +81,7 @@ def validate_store(directory, project, records):
         if connection.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
             raise RuntimeError('实验数据库完整性检查失败')
         projects = [dict(r) for r in connection.execute('SELECT id,name,path FROM project')]
-        if len(projects) != 1 or projects[0]['name'] != project or Path(projects[0]['path']) != directory / 'notes':
+        if len(projects) != 1 or projects[0]['name'] != project or Path(projects[0]['path']).resolve() != (directory / 'notes').resolve():
             raise RuntimeError('实验数据库 project 隔离不符')
         rows = [dict(r) for r in connection.execute('SELECT * FROM note_content ORDER BY file_path')]
         exported = {r['path']: r['markdown'] for r in records}
@@ -107,10 +109,10 @@ def agent_input(text, project, thread_id):
             '<historical_transcript>\n' + text + '\n</historical_transcript>')
 
 
-def function_tools(native):
+def function_tools(native, allowed=ALLOWED, required=frozenset({'bm_write', 'bm_edit', 'bm_read', 'bm_search'})):
     """保留产品原生工具说明和 schema；只收窄工具集合，不自创写入工具。"""
-    selected = [t for t in native if t['name'] in ALLOWED]
-    if not {'bm_write', 'bm_edit', 'bm_read', 'bm_search'} <= {t['name'] for t in selected}:
+    selected = [t for t in native if t['name'] in allowed]
+    if not required <= {t['name'] for t in selected}:
         raise RuntimeError('固定版本缺少必要 MCP 工具')
     return [dict(type='function', function=dict(name=t['name'], description=t.get('description', ''),
                                                parameters=t['inputSchema'])) for t in selected]
@@ -123,16 +125,24 @@ def chat(base_url, body, timeout):
         return json.load(response)
 
 
+def tool_error(message):
+    return dict(isError=True, content=[dict(type='text', text=message)])
+
+
 def agent_loop(base_url, model, prompt, user_input, tools, call_tool, state, audit,
-               max_rounds=12, max_total_tokens=200000, request_timeout=180, deadline=None):
-    """最小 OpenAI function calling 循环；不重试、不压缩、不修复模型输出。"""
+               max_rounds=12, max_total_tokens=200000, request_timeout=180, deadline=None, *,
+               allowed=ALLOWED):
+    """Return tool errors in the same conversation with at most two correction turns."""
     messages = [dict(role='system', content=prompt), dict(role='user', content=user_input)]
     names = {t['function']['name'] for t in tools}
-    state.update(rounds=0, tool_calls=[], total_tokens=0, stop_reason='running')
+    state.update(rounds=0, tool_calls=[], total_tokens=0, stop_reason='running', correction_turns=0)
+    needs_correction = False
     try:
         for turn in range(1, max_rounds + 1):
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError('agent 总时限已过')
+            if needs_correction:
+                state['correction_turns'] += 1
             state['rounds'] = turn
             remaining = request_timeout if deadline is None else min(request_timeout, deadline - time.monotonic())
             # 不传生成参数，沿用服务端默认。
@@ -163,26 +173,48 @@ def agent_loop(base_url, model, prompt, user_input, tools, call_tool, state, aud
             if not calls:
                 if choice.get('finish_reason') != 'stop':
                     raise RuntimeError('agent 未正常结束')
+                if needs_correction:
+                    if state['correction_turns'] >= 2:
+                        state['stop_reason'] = 'tool_corrections_exhausted'
+                        raise RuntimeError('agent 的工具错误未纠正，已用尽两次纠正机会')
+                    messages.append(dict(role='user', content='上一轮工具错误尚未纠正。请根据已返回的错误结果纠正调用。'))
+                    continue
                 state['stop_reason'] = 'completed'
                 return state
             if choice.get('finish_reason') != 'tool_calls':
                 raise RuntimeError('模型工具调用结束标记不符')
+            needs_correction = False
+            history_calls = []
+            assistant['tool_calls'] = history_calls
             for call in calls:
                 name = call['function']['name']
-                if name not in names or name not in ALLOWED:
+                if name not in names or name not in allowed:
                     raise RuntimeError('模型请求未开放工具')
-                arguments = json.loads(call['function']['arguments'])
-                if not isinstance(arguments, dict):
-                    raise RuntimeError('工具参数不是对象')
                 record = dict(round=turn, name=name, id=call['id'], status='pending')
                 state['tool_calls'].append(record)
-                result = call_tool(name, arguments)
+                try:
+                    arguments = json.loads(call['function']['arguments'])
+                    if not isinstance(arguments, dict):
+                        raise ValueError('tool arguments must be a JSON object')
+                except (TypeError, ValueError) as exc:
+                    arguments = None
+                    result = tool_error(f'Invalid tool arguments: {exc}. Retry this tool with a valid JSON object.')
+                    # Keep the raw response in its audit file. A well-formed history is
+                    # required by endpoints that validate prior function calls on input.
+                    history_calls.append(dict(call, function=dict(call['function'], arguments='{}')))
+                else:
+                    history_calls.append(call)
+                    result = call_tool(name, arguments)
                 record['status'] = 'error' if result.get('isError') else 'ok'
+                needs_correction |= record['status'] == 'error'
                 write_json(audit / f'tool-{len(state["tool_calls"]):03d}.json',
                            dict(**record, arguments=arguments, result=result))
                 # 原生工具拒绝原样交还 agent，可在预算内读取并修正；不伪装成功。
                 messages.append(dict(role='tool', tool_call_id=call['id'],
                                      content=json.dumps(result, ensure_ascii=False)))
+            if needs_correction and state['correction_turns'] >= 2:
+                state['stop_reason'] = 'tool_corrections_exhausted'
+                raise RuntimeError('agent 的工具错误未纠正，已用尽两次纠正机会')
         state['stop_reason'] = 'max_rounds'
         raise BudgetExceeded('agent 达到最大轮数')
     finally:
@@ -234,6 +266,8 @@ class StdioMCP:
             if value.get('id') == sequence:
                 write_json(self.directory / f'mcp-{sequence:04d}.json', dict(method=method, params=params, response=value))
                 if 'error' in value:
+                    if method == 'tools/call':
+                        return tool_error('MCP tool error: ' + str((value['error'] or {}).get('message', 'unknown error')))
                     raise RuntimeError('MCP 协议返回错误')
                 return value['result']
 
@@ -282,10 +316,15 @@ def isolated_mcp(args, directory, config, proxy, project):
                 semantic_embedding_provider='openai', semantic_embedding_model=config['embedding_model'],
                 semantic_embedding_api_base=proxy.url, semantic_embedding_dimensions=config['dimensions'],
                 semantic_embedding_batch_size=20, default_search_type='text')
+    if getattr(args, 'v07', False):
+        conf = {key: value for key, value in conf.items() if not key.startswith('semantic_embedding_')}
     write_json(directory / 'config/config.json', conf)
     command = [str(args.python.with_name('basic-memory')), 'mcp', '--project', project]
     with (directory / 'server.log').open('w') as log:
-        process = subprocess.Popen(command, cwd=directory, env=child_environment(directory), stdin=subprocess.PIPE,
+        env = child_environment(directory)
+        if getattr(args, 'v07', False) and os.environ.get('V07_FASTEMBED_CACHE'):
+            env['FASTEMBED_CACHE_PATH'] = os.environ['V07_FASTEMBED_CACHE']
+        process = subprocess.Popen(command, cwd=directory, env=env, stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=log, text=True, bufsize=1, start_new_session=True)
         write_json(directory / 'process.json', dict(pid=process.pid, command=command))
         client = StdioMCP(process, directory, time.monotonic() + args.timeout)
@@ -347,7 +386,8 @@ def generate(sample, args, config, package):
     started = time.monotonic()
     directory = ENVS / 'runs' / (sample.name + '-' + uuid.uuid4().hex)
     directory.mkdir(parents=True, mode=0o700)
-    project, state = 'eval-' + uuid.uuid4().hex, {}
+    project = declared_project(text) if getattr(args, 'v07', False) else 'eval-' + uuid.uuid4().hex
+    state = {}
     manifest = dict(sample=sample.name, system=SYSTEM, time=now(), status='running', product=package,
                     input_sha256=sha256_text(text), raw_directory=str(directory.relative_to(ROOT)), environment=environment())
     proxy = ModelProxy(config, directory, args.request_timeout)
@@ -358,7 +398,8 @@ def generate(sample, args, config, package):
                            tools, call_tool, state, directory, args.max_rounds, args.max_total_tokens,
                            args.request_timeout, deadline)
             records = export_notes(directory / 'notes')
-            store = validate_store(directory, project, records)
+            native_project = read_json(directory / 'config/config.json')['default_project'] if getattr(args, 'v07', False) else project
+            store = validate_store(directory, native_project, records)
             write_json(directory / 'export.json', dict(records=records, store=store, granularity='整篇笔记正文'))
             if proxy.errors or any(c.get('status') != 200 for c in proxy.calls):
                 raise RuntimeError('模型调用失败或未完成')
@@ -385,13 +426,19 @@ def generate(sample, args, config, package):
                     context=dict(window='未记录', input_characters=len(text), adapter_input_truncated=False,
                         source_truncation_markers=text.count('截断'), product_input_truncated=False, output_truncated=False),
                     isolation=dict(project=project, cloud=False, auto_update=False, watcher=False, network='仅回环'),
-                    timeout=dict(seconds=args.timeout, occurred=False), retries='agent 不重试；代理限流重试见调用审计',
+                    timeout=dict(seconds=args.timeout, occurred=False),
+                    retries='agent 工具错误最多纠正两次，代理限流记录见调用审计',
                     dataset_manifest='见样本来源；版本未记录', time=now(), environment=environment(),
                     elapsed_seconds=round(time.monotonic() - started, 3))
         # 被测进程已停稳；gold 只用于输出外壳，U/N 从未进入 agent 或产品。
         run = run_shell(read_json(sample / 'gold.json'), meta, values)
         for item, record in zip(run['D'], records):
             item['native_source'] = dict(kind='note', path=record['path'], sha256=record['sha256'])
+            if getattr(args, 'v07', False):
+                item['reader_metadata'] = dict(scope='project:' + native_project, source=record['path'])
+        if getattr(args, 'v07', False):
+            meta['embedding_model'] = 'bge-small-en-v1.5'
+            meta['embedding'] = dict(provider='native-fastembed', dimensions=384)
         write_json(target, run, overwrite=args.force)
         manifest.update(status='written', output=str(target.relative_to(ROOT)), exported=len(values),
                         run_sha256=sha256_file(target))
@@ -412,6 +459,7 @@ def generate(sample, args, config, package):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-dir', type=Path, required=True)
+    parser.add_argument('--v07', action='store_true', help='使用 v0.7 项目头部和原生向量默认值')
     parser.add_argument('--python', type=Path, default=ENVS / 'bin/python')
     parser.add_argument('--timeout', type=float, default=900)
     parser.add_argument('--request-timeout', type=float, default=180)
