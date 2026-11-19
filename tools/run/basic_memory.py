@@ -306,11 +306,19 @@ print(json.dumps(dict(version=p.version,python=sys.version,platform=platform.pla
 
 
 @contextmanager
-def isolated_mcp(args, directory, config, proxy, project):
+def isolated_mcp(args, directory, config, proxy, project, *, projects=None, existing_store=False):
     for name in ('home', 'temp', 'config', 'notes'):
-        (directory / name).mkdir()
+        (directory / name).mkdir(exist_ok=existing_store)
+    audit=directory
+    if existing_store:
+        audit=directory/('reopen-'+uuid.uuid4().hex)
+        audit.mkdir()
     # v1.0.0 写入会异步生成向量；不能靠关闭 watcher 假装停用了 embedding。
-    conf = dict(projects={project: dict(path=str(directory / 'notes'), mode='local')}, default_project=project,
+    roots = ({name: directory / 'notes' / name for name in projects} if projects else
+             {project: directory / 'notes'})
+    for root in roots.values():
+        root.mkdir(exist_ok=True)
+    conf = dict(projects={name: dict(path=str(path), mode='local') for name,path in roots.items()}, default_project=project,
                 auto_update=False, logfire_enabled=False, logfire_send_to_logfire=False,
                 cloud_promo_opt_out=True, index_changes=False, reranker_enabled=False,
                 semantic_embedding_provider='openai', semantic_embedding_model=config['embedding_model'],
@@ -319,15 +327,17 @@ def isolated_mcp(args, directory, config, proxy, project):
     if getattr(args, 'v07', False):
         conf = {key: value for key, value in conf.items() if not key.startswith('semantic_embedding_')}
     write_json(directory / 'config/config.json', conf)
-    command = [str(args.python.with_name('basic-memory')), 'mcp', '--project', project]
-    with (directory / 'server.log').open('w') as log:
+    command = [str(args.python.with_name('basic-memory')), 'mcp']
+    if len(roots) == 1:
+        command.extend(('--project', project))
+    with (audit / 'server.log').open('w') as log:
         env = child_environment(directory)
         if getattr(args, 'v07', False) and os.environ.get('V07_FASTEMBED_CACHE'):
             env['FASTEMBED_CACHE_PATH'] = os.environ['V07_FASTEMBED_CACHE']
         process = subprocess.Popen(command, cwd=directory, env=env, stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=log, text=True, bufsize=1, start_new_session=True)
-        write_json(directory / 'process.json', dict(pid=process.pid, command=command))
-        client = StdioMCP(process, directory, time.monotonic() + args.timeout)
+        write_json(audit / 'process.json', dict(pid=process.pid, command=command))
+        client = StdioMCP(process, audit, time.monotonic() + args.timeout)
         clean = False
         try:
             client.deadline = time.monotonic() + args.startup_timeout
@@ -335,7 +345,7 @@ def isolated_mcp(args, directory, config, proxy, project):
                                   clientInfo=dict(name=SYSTEM, version='1')))
             client.send('notifications/initialized')
             client.deadline = time.monotonic() + args.timeout
-            if export_notes(directory / 'notes'):
+            if not existing_store and export_notes(directory / 'notes'):
                 raise RuntimeError('新项目不是空库')
             native, cursor = [], None
             while True:
@@ -344,14 +354,14 @@ def isolated_mcp(args, directory, config, proxy, project):
                 cursor = page.get('nextCursor')
                 if not cursor:
                     break
-            write_json(directory / 'mcp-tools.json', dict(initialize=init, tools=native))
+            write_json(audit / 'mcp-tools.json', dict(initialize=init, tools=native))
 
-            def call_tool(name, arguments):
+            def call_tool(name, arguments, *, scope=project):
                 if name not in ALLOWED:
                     raise RuntimeError('禁止未开放工具')
-                if arguments.get('project', project) != project or arguments.get('all_projects') or arguments.get('projects'):
+                if scope not in roots or arguments.get('project', scope) != scope or arguments.get('all_projects') or arguments.get('projects'):
                     raise RuntimeError('工具试图访问其他 project')
-                arguments = dict(arguments, project=project)
+                arguments = dict(arguments, project=scope)
                 return client.request('tools/call', dict(name=name, arguments=arguments))
 
             yield function_tools(native), call_tool, client.deadline
@@ -373,7 +383,7 @@ def isolated_mcp(args, directory, config, proxy, project):
             finally:
                 process.stdout.close()
                 client.thread.join(timeout=2)
-                write_json(directory / 'exit.json', dict(returncode=process.returncode))
+                write_json(audit / 'exit.json', dict(returncode=process.returncode))
             if clean and process.returncode != 0:
                 raise RuntimeError('Basic Memory 非正常退出')
 

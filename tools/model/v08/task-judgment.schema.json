@@ -1,0 +1,44 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["judgments"],
+  "properties": {
+    "judgments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["task_id", "verdict", "requirements", "action_error", "error_matches_memory", "actual_reuse", "misleading", "unclear_attribution", "high_risk", "invalid_reason", "note", "incorrect_subject", "superseded_used"],
+        "properties": {
+          "task_id": {"type": "string"},
+          "verdict": {"enum": ["correct", "partial", "specific_abstention", "wrong"]},
+          "requirements": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["requirement_id", "status", "memory_ids", "first_delivery_step", "used_delivered_evidence"],
+              "properties": {
+                "requirement_id": {"type": "string"},
+                "status": {"enum": ["supported", "missing", "contradicted"]},
+                "memory_ids": {"type": "array", "items": {"type": "string"}},
+                "first_delivery_step": {"type": ["integer", "null"]},
+                "used_delivered_evidence": {"type": "boolean"}
+              }
+            }
+          },
+          "action_error": {"type": "boolean"},
+          "error_matches_memory": {"type": "boolean"},
+          "actual_reuse": {"type": "boolean"},
+          "misleading": {"type": "boolean"},
+          "unclear_attribution": {"type": "boolean"},
+          "high_risk": {"type": "boolean"},
+          "invalid_reason": {"type": "string"},
+          "note": {"type": "string"},
+          "incorrect_subject": {"type": "boolean"},
+          "superseded_used": {"type": "boolean"}
+        }
+      }
+    }
+  }
+}

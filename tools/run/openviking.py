@@ -63,10 +63,10 @@ def select_records(records, initial_templates):
     return selected, excluded
 
 
-def api(base, path, body=None, timeout=30, **query):
+def api(base, path, body=None, timeout=30, *, headers=None, **query):
     url = base + path + ('?' + urlencode(query) if query else '')
     payload = None if body is None else json.dumps(body).encode()
-    with urlopen(Request(url, data=payload, headers={'Content-Type': 'application/json'}), timeout=timeout) as response:
+    with urlopen(Request(url, data=payload, headers={'Content-Type': 'application/json', **(headers or {})}), timeout=timeout) as response:
         value = json.load(response)
     if value.get('status') not in ('ok', 'ready'):
         raise RuntimeError('产品 API 返回失败状态')
@@ -77,7 +77,7 @@ def result(base, path, body=None, timeout=30, **query):
     return api(base, path, body, timeout, **query)['result']
 
 
-def list_files(base, uri, hidden=False):
+def list_files(base, uri, hidden=False, *, headers=None):
     """逐层递归并分页：固定版 recursive=true 默认只下钻三层，会漏深层事件。"""
     rows, pending, visited = [], [uri], set()
     while pending:
@@ -87,7 +87,7 @@ def list_files(base, uri, hidden=False):
         visited.add(current)
         offset = 0
         while True:
-            page = api(base, '/api/v1/fs/ls', uri=current, recursive='false', output='original',
+            page = api(base, '/api/v1/fs/ls', headers=headers, uri=current, recursive='false', output='original',
                        show_all_hidden=str(hidden).lower(), offset=offset, limit=200)
             entries = page['result']
             rows.extend(entries)
@@ -100,8 +100,8 @@ def list_files(base, uri, hidden=False):
     return rows
 
 
-def read_content(base, uri):
-    return result(base, '/api/v1/content/read', uri=uri, offset=0, limit=-1)
+def read_content(base, uri, *, headers=None):
+    return result(base, '/api/v1/content/read', headers=headers, uri=uri, offset=0, limit=-1)
 
 
 def memory_files(base, user_root):
@@ -199,11 +199,11 @@ def isolated_server(python, directory, config, proxy, startup_timeout):
         conf_path.unlink(missing_ok=True)
 
 
-def wait_commit(base, commit, deadline, poll):
+def wait_commit(base, commit, deadline, poll, *, headers=None):
     if commit.get('status') != 'accepted' or not commit.get('task_id'):
         raise RuntimeError('commit 未启动抽取')
     while time.monotonic() < deadline:
-        task = result(base, '/api/v1/tasks/' + commit['task_id'],
+        task = result(base, '/api/v1/tasks/' + commit['task_id'], headers=headers,
                       timeout=max(0.1, min(30, deadline - time.monotonic())))
         if task['status'] in ('failed', 'cancelled'):
             raise RuntimeError('异步抽取任务失败')

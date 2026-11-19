@@ -227,3 +227,14 @@ python3 -m unittest
 4. 用 `python -m tools.model.v07.report --data-dir <样本目录> --output-dir <私有输出目录> --date <日期>` 复算汇总。若有经核实的全组撤销题目，用 `--task-exclusions` 传入。先核查私有输出，只发布允许公开的汇总。
 
 X2 是未公开的内部系统。安装器和生成技能的位置分别通过 `X2_INSTALLER_RELATIVE`、`X2_GENERATED_SKILL_RELATIVE` 传入相对于运行目录的路径。源码目录、回环服务端口、独立评测数据库名、数据库端口和凭据文件分别通过 `X2_REPO`、`X2_PORT`、`X2_DATABASE_NAME`、`X2_DATABASE_PORT`、`X2_DATABASE_URL_FILE` 传入。数据库适配器要求本地专用数据库和角色，启动前检查 PostgreSQL 实际库名与角色。原始模型输入、输出和凭据都留在本地。
+
+## v0.8 累计库评测
+
+v0.8 使用每域累计写入，期末在独立读者会话中走产品原生接口。源会话、冻结题卡、回执和明细均留在 Git 忽略的 `tmp/`。报告只发布汇总。
+
+1. 在独立 Python 环境安装 `tiktoken==0.14.0`。运行 `python -m tools.model.v08.corpus prepare --root <实验目录> --history <历史数据目录> --trace-raw <原始会话目录> --halumem <原始 JSONL>`，再用同一入口的 `cards` 冻结题卡。历史索引用 `--audit-root` 补充。
+2. 对每个产品用 `python -m tools.model.v08.run <系统> --root <实验目录> --pilot` 验证一段 coding 和一场 HaluMem。通过后去掉 `--pilot`，在新评测域运行正式轮。N 的原生调用上限为五次，启动注入记第 0 步。E 仅在冻结子集上使用同权限导出。
+3. 用 `python -m tools.model.v08.evaluate --root <实验目录>` 生成共享基线、判分及期末库诊断。试跑验证另传 `--pilot`。
+4. 用 `python -m tools.model.v08.report --root <实验目录> --output reports/<日期>/v0.8.md` 汇总。发布前只检查允许公开的文件。
+
+原生适配器需要独立的固定版本产品运行环境。X2 用本地专用数据库与评测角色，入口校验实际数据库名、角色和回环地址。源码版本、安装器、生成的原生集成位置及评测连接由 `X2_*` 环境变量给定。私有连接配置和各产品的回放数据须保留在本地。

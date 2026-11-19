@@ -40,7 +40,7 @@ def _run(command, prompt, role, model, effort, timeout=600):
     return result, receipt
 
 
-def codex(role, prompt, validate):
+def codex(role, prompt, validate, *, output_schema=None):
     effort = STAGES[role]
     command = ['codex', 'exec', '--ignore-user-config', '--ignore-rules', '--disable', 'hooks',
                '--disable', 'apps', '--disable', 'in_app_browser', '--disable', 'in_app_local_automation',
@@ -48,7 +48,10 @@ def codex(role, prompt, validate):
                '--disable', 'plugins', '--disable', 'remote_plugin', '--disable', 'skill_mcp_dependency_install',
                '-c', 'web_search="disabled"', '-c', 'project_doc_max_bytes=0', '-c', 'mcp_servers={}',
                '-m', JUDGE_MODEL, '-c', f'model_reasoning_effort="{effort}"', '-s', 'read-only',
-               '--skip-git-repo-check', '--ephemeral', '--json', '-']
+               '--skip-git-repo-check', '--ephemeral', '--json']
+    if output_schema is not None:
+        command.extend(('--output-schema', str(output_schema.resolve())))
+    command.append('-')
     receipts = []
     prompt = '直接在最终回复给出 JSON。不要调用任何工具，也不要列举、读取或搜索资源。\n\n' + prompt
     for attempt in range(2):
