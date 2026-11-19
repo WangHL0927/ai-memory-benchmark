@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -74,6 +75,38 @@ try {
       select d.id, d.last_review_error, d.review_attempts
       from draft d join space s on s.id = d.space_id
       where s.tenant_id = $1 and d.state = 'pending' order by d.created_at, d.id`, [input.tenant_id]);
+  } else if (action === 'readback-key') {
+    if (!/^[0-9a-f-]{36}$/.test(input.draft_id ?? '')) throw new Error('Invalid draft receipt ID');
+    const { createKey } = await source('auth');
+    result = await db.tx(async client => {
+      const { rows: [principal] } = await client.query(`
+        select a.id, a.tenant_id, 'agent'::text as principal_type
+        from draft d join space s on s.id = d.space_id join tenant t on t.id = s.tenant_id
+        join api_key k on d.submitter = k.id and k.tenant_id = t.id and k.principal_type = 'agent'
+        join agent a on a.id = k.principal_id and a.tenant_id = t.id
+        where d.id = $1 and t.name ~ '^x2-eval-[0-9a-f]{32}$'
+          and a.name = 'eval-agent' and a.disabled_at is null
+          and not exists (select 1 from draft x join space xs on xs.id = x.space_id
+            where xs.tenant_id = t.id and x.state = 'pending')`, [input.draft_id]);
+      if (!principal) throw new Error('No settled evaluation agent matches the draft receipt');
+      const key = await createKey(client, 'eval-readback-' + randomUUID(), principal);
+      return { tenant_id: principal.tenant_id, agent_id: principal.id, key: key.key, key_id: key.id };
+    });
+  } else if (action === 'revoke-readback-key') {
+    result = await db.query(`
+      update api_key k set revoked_at = now() from tenant t where k.tenant_id = t.id
+      and t.name ~ '^x2-eval-[0-9a-f]{32}$' and k.name ~ '^eval-readback-[0-9a-f-]{36}$' and k.id = $1
+      returning k.id`, [input.key_id]);
+  } else if (action === 'draft-states') {
+    if (!Array.isArray(input.drafts) || input.drafts.some(id => !/^[0-9a-f-]{36}$/.test(id))) {
+      throw new Error('Explicit draft receipt IDs are required');
+    }
+    result = await db.query(`
+      select d.id, d.session_id, d.state, s.tenant_id, d.decision->>'reason' as reason,
+        d.decision->>'outcome' as outcome, d.last_review_error, d.review_attempts
+      from draft d join space s on s.id = d.space_id join tenant t on t.id = s.tenant_id
+      where d.id = any($1::uuid[]) and t.name ~ '^x2-eval-[0-9a-f]{32}$'
+      order by d.created_at, d.id`, [input.drafts]);
   } else if (action === 'export') {
     result = await db.tx(async client => {
       await client.query('set transaction isolation level repeatable read read only');

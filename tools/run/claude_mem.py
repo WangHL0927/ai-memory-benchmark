@@ -225,9 +225,9 @@ def child_environment(directory, config, proxy, port):
 
 
 @contextmanager
-def isolated_worker(args, directory, config, proxy):
+def isolated_worker(args, directory, config, proxy, *, existing_store=False):
     for name in ('home', 'temp', 'store', 'work'):
-        (directory / name).mkdir()
+        (directory / name).mkdir(exist_ok=existing_store and name == 'store')
     (directory / 'empty.env').touch(mode=0o600)
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
@@ -278,7 +278,7 @@ def isolated_worker(args, directory, config, proxy):
                         stats = http(base, '/api/stats')
                         if Path(stats['database']['path']) != directory / 'store/claude-mem.db':
                             raise RuntimeError('数据库隔离失败')
-                        if any(stats['database'][k] for k in ('observations', 'sessions', 'summaries')):
+                        if not existing_store and any(stats['database'][k] for k in ('observations', 'sessions', 'summaries')):
                             raise RuntimeError('新 worker 数据库非空')
                         break
                 except (URLError, TimeoutError):
