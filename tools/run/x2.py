@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import time
 from urllib.parse import urlsplit
+from urllib.error import HTTPError
 from urllib.request import build_opener, HTTPRedirectHandler, ProxyHandler, Request
 import uuid
 
@@ -26,6 +27,8 @@ TOOLS = frozenset({'submit', 'mark'})
 ENVS = TMP / 'envs/X2'
 STORE = Path(__file__).with_suffix('') / 'store.mjs'
 MAX_INPUT = 2_000_000
+REVISE_TIMEOUT = 240
+TRANSCRIPT_UPLOAD_TIMEOUT = 8
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -104,12 +107,36 @@ def isolated_server(args, directory, env):
 
 
 class MCP:
-    def __init__(self, base, key, directory, timeout):
+    def __init__(self, base, key, directory, timeout, *, session_id=None):
         self.base = base
         self.headers = {'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json',
                         'Accept': 'application/json, text/event-stream'}
         self.directory, self.timeout, self.sequence = directory, timeout, 0
+        self.session_id = session_id
         self.opener = build_opener(ProxyHandler({}), NoRedirect())
+
+    def upload_transcript(self, text, stage):
+        payload = dict(session_id=self.session_id, transcript=text, truncated=False)
+        request = Request(self.base + '/v1/session/transcript/upload',
+                          data=json.dumps(payload, ensure_ascii=False).encode(),
+                          headers=dict(self.headers, Accept='application/json'))
+        audit = dict(stage=stage, session_id=self.session_id, bytes=len(text.encode()),
+                     sha256=sha256_text(text), uploaded=False)
+        try:
+            with self.opener.open(request, timeout=TRANSCRIPT_UPLOAD_TIMEOUT) as response:
+                audit['http_status'] = response.status
+                result = json.load(response)
+            if result.get('code') == 0 and (result.get('result') or {}).get('uploaded') is True:
+                audit['uploaded'] = True
+            else:
+                audit['error'] = 'unexpected_response'
+        except HTTPError as error:
+            with error:
+                audit.update(http_status=error.code, error='HTTPError')
+        except (OSError, ValueError, AttributeError) as error:
+            audit['error'] = type(error).__name__
+        write_json(self.directory / f'transcript-upload-{stage}.json', audit)
+        return audit
 
     def request(self, method, params=None, *, notification=False):
         self.sequence += 1
@@ -142,6 +169,8 @@ class MCP:
     def call(self, name, arguments):
         if name not in TOOLS:
             raise RuntimeError('禁止调用未开放的 X2 MCP 工具')
+        if name == 'submit' and self.session_id is not None:
+            arguments = dict(arguments, session_id=self.session_id)
         return self.request('tools/call', dict(name=name, arguments=arguments))
 
 
@@ -223,12 +252,15 @@ def generate(sample, args, config, package, base_env):
     directory = ENVS / sample.name / tenant_name
     directory.mkdir(parents=True, mode=0o700)
     started = time.monotonic()
-    state, tenant = {}, None
+    state, tenant, uploads = {}, None, []
     manifest = dict(sample=sample.name, systems=systems, status='running',
                     product=package, input_sha256=sha256_text(text), time=now())
     proxy = ModelProxy(config, directory, args.request_timeout,
                        max_input_tokens=MAX_INPUT, stop_file=args.stop_file, track_phase=True,
-                       revise_model=args.revise_model)
+                       revise_model=args.revise_model,
+                       revise_timeout=max(args.request_timeout, REVISE_TIMEOUT + 15)
+                       if args.upload_transcript else None,
+                       revise_json_keyword=args.upload_transcript)
     try:
         tenant = db(args, base_env, 'tenant', tenant=tenant_name, projects=projects)
         scope = dict(tenant_id=tenant['tenant_id'], agent_id=tenant['agent_id'])
@@ -238,12 +270,15 @@ def generate(sample, args, config, package, base_env):
                    REVIEW_LLM_TIMEOUT_MS='90000', REVIEW_INTERVAL_MS='1000')
         if args.revise_model:
             env['REVIEW_REVISE_LLM_MODEL'] = args.revise_model
+        if args.upload_transcript:
+            env['REVIEW_REVISE_LLM_TIMEOUT_MS'] = str(REVISE_TIMEOUT * 1000)
         install = directory / 'client'
         subprocess.run([args.node, str(args.source / args.installer), '--project', str(install)],
                        cwd=directory, env=env, capture_output=True, check=True, timeout=30)
         skill = (install / args.generated_skill).read_bytes().decode()
         with proxy, isolated_server(args, directory, env):
-            client = MCP(args.base, tenant['key'], directory, args.startup_timeout)
+            client = MCP(args.base, tenant['key'], directory, args.startup_timeout,
+                         session_id=sample.name if args.upload_transcript else None)
             init = client.request('initialize', dict(protocolVersion='2025-03-26', capabilities={},
                                                       clientInfo=dict(name='x2-eval', version='1')))
             client.request('notifications/initialized', notification=True)
@@ -252,9 +287,16 @@ def generate(sample, args, config, package, base_env):
             if not version_line.startswith('intake_version: ') or version_line not in skill:
                 raise RuntimeError('X2 MCP 与安装器生成的 intake_version 不一致')
             prompt = instructions + '\n\n' + skill
-            agent_loop(proxy.url, config['model'], prompt, agent_input(text, projects, sample.name),
-                       client.tools(), client.call, state, directory, args.max_rounds, MAX_INPUT,
-                       args.request_timeout, time.monotonic() + args.agent_timeout, allowed=TOOLS)
+            tools = client.tools()
+            if args.upload_transcript:
+                uploads.append(client.upload_transcript(text, 'before'))
+            try:
+                agent_loop(proxy.url, config['model'], prompt, agent_input(text, projects, sample.name),
+                           tools, client.call, state, directory, args.max_rounds, MAX_INPUT,
+                           args.request_timeout, time.monotonic() + args.agent_timeout, allowed=TOOLS)
+            finally:
+                if args.upload_transcript:
+                    uploads.append(client.upload_transcript(text, 'after'))
             deadline = time.monotonic() + args.review_timeout
             while pending := db(args, base_env, 'pending', **scope):
                 if proxy.input_limit_exceeded:
@@ -286,6 +328,7 @@ def generate(sample, args, config, package, base_env):
         usage = model_usage(proxy)
         meta = dict(product=package, version=package['version'], llm=config['model'],
                     revise_llm=args.revise_model,
+                    transcript_uploads=uploads,
                     configuration='固定 agent + 原生自动审核', agent=state, reviews=decisions,
                     projects=projects, project_source=project_source,
                     prompt_version=version_line, prompt_sha256=sha256_text(prompt),
@@ -309,7 +352,7 @@ def generate(sample, args, config, package, base_env):
             raise SystemExit('样本超过 200 万输入 token，停止评测') from None
         raise
     finally:
-        manifest.update(usage=model_usage(proxy), calls=proxy.calls, agent=state,
+        manifest.update(usage=model_usage(proxy), calls=proxy.calls, agent=state, transcript_uploads=uploads,
                         input_limit_exceeded=proxy.input_limit_exceeded,
                         elapsed_seconds=round(time.monotonic() - started, 3))
         write_json(directory / 'manifest.json', manifest)
@@ -351,6 +394,7 @@ def main():
         if args.stop_file is not None:
             args.stop_file = output_path(args.stop_file)
         config = settings()
+        args.upload_transcript = os.environ.get('X2_UPLOAD_TRANSCRIPT') == '1'
         args.revise_model = os.environ.get('REVIEW_REVISE_LLM_MODEL', '').strip() or None
         if args.revise_model == config['model']:
             raise ValueError('独立修订模型必须与摄取及审核模型不同')

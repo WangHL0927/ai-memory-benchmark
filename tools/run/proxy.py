@@ -35,7 +35,7 @@ def settings():
 class ModelProxy:
     """只在内存持有真实 key；不保存 HTTP headers，不让产品进程接触 key。"""
     def __init__(self, config, directory, timeout, *, max_input_tokens=None, stop_file=None, track_phase=False,
-                 revise_model=None):
+                 revise_model=None, revise_timeout=None, revise_json_keyword=False):
         self.config, self.directory, self.timeout = config, directory, timeout
         self.calls, self.lock = [], threading.Lock()
         self.errors = []
@@ -64,6 +64,12 @@ class ModelProxy:
                         revise_model if phase == 'revise' else config['model'])
                     if requested != expected:
                         raise RuntimeError('产品请求了非指定模型')
+                    if phase == 'revise' and revise_json_keyword and body.get('response_format') == {'type': 'json_object'}:
+                        # The provider requires a literal JSON keyword for JSON object mode.
+                        system = body['messages'][0]
+                        if system['role'] != 'system':
+                            raise RuntimeError('修订请求缺少系统提示')
+                        system['content'] += '\n\nReturn a JSON object.'
                     with owner.lock:
                         if owner.input_limit_exceeded or (stop_file is not None and stop_file.exists()):
                             raise RuntimeError('评测输入 token 已达到停止条件')
@@ -79,9 +85,10 @@ class ModelProxy:
                                                'Authorization': 'Bearer ' + config['key']})
                     # 服务端限流（429，或 503 / ServiceUnavailable）时在代理里退避重试，最多 3 次，产品侧无感；
                     # 重试次数写进记录。其他错误原样返回给产品。
+                    upstream_timeout = (revise_timeout or owner.timeout) if phase == 'revise' else owner.timeout
                     for retry in range(4):
                         try:
-                            with urlopen(request, timeout=owner.timeout) as response:
+                            with urlopen(request, timeout=upstream_timeout) as response:
                                 raw, status = response.read(), response.status
                                 content_type = response.headers.get('Content-Type', 'application/json')
                         except HTTPError as exc:

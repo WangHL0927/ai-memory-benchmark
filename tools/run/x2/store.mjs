@@ -78,7 +78,7 @@ try {
     result = await db.tx(async client => {
       await client.query('set transaction isolation level repeatable read read only');
       const drafts = await client.query(`
-        select d.id, d.op, d.proposed, d.state, d.decision, d.last_review_error, d.review_attempts
+        select d.id, d.op, d.proposed, d.session_id, d.evidence, d.state, d.decision, d.last_review_error, d.review_attempts
         from draft d join space s on s.id = d.space_id
         where s.tenant_id = $1 order by d.created_at, d.id`, [input.tenant_id]);
       const pages = await client.query(`
